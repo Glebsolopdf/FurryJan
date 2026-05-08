@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 
@@ -18,6 +19,10 @@ func main() {
 	exitCode := 0
 	defer func() {
 		log.Printf("[Shutdown] Cleaning up resources...")
+
+		// Kill all related processes gracefully
+		log.Printf("[Shutdown] Terminating background processes...")
+		killProcesses()
 
 		if err := blob.StopDefaultBlobWriter(); err != nil {
 			log.Printf("Warning: Error stopping blob writer: %v", err)
@@ -143,5 +148,20 @@ func main() {
 		log.Printf("UI error: %v", err)
 		exitCode = 1
 		return
+	}
+}
+
+// killProcesses terminates all e621dl and furryjan processes
+func killProcesses() {
+	processes := []string{"e621dl", "furryjan"}
+
+	for _, proc := range processes {
+		cmd := exec.Command("pkill", "-f", proc)
+		// Suppress error output - it's expected if no processes are found
+		err := cmd.Run()
+		if err == nil {
+			log.Printf("[Shutdown] Killed process: %s", proc)
+		}
+		// Don't log errors - pkill returns error if no process found, which is fine
 	}
 }

@@ -6,6 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+
+	"furryjan/assets"
 )
 
 func EnsureInstalled() error {
@@ -53,6 +56,9 @@ func EnsureInstalled() error {
 		i18nDst := "/usr/share/furryjan/i18n"
 		_ = copyDirWithSudo(i18nSrc, i18nDst)
 	}
+
+	_ = createDesktopFile()
+	_ = installIcon()
 
 	fmt.Println("✓ Furryjan installed to /usr/bin/furryjan")
 	fmt.Println()
@@ -111,4 +117,47 @@ func copyFile(src, dst string) error {
 func copyDirWithSudo(src, dst string) error {
 	cmd := exec.Command("sudo", "cp", "-r", src, dst)
 	return cmd.Run()
+}
+
+func createDesktopFile() error {
+	desktopContent := `[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Furryjan
+Comment=e621 Content Downloader
+Exec=/usr/bin/furryjan
+Terminal=true
+Categories=Utility;Network;FileTransfer;
+Icon=/usr/share/pixmaps/furryjan.png
+StartupNotify=true
+`
+	cmd := exec.Command("sudo", "tee", "/usr/share/applications/furryjan.desktop")
+	cmd.Stdin = strings.NewReader(desktopContent)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	exec.Command("sudo", "chmod", "644", "/usr/share/applications/furryjan.desktop").Run()
+	return nil
+}
+
+func installIcon() error {
+	iconData, err := assets.FS.ReadFile("icon.png")
+	if err != nil {
+		return nil
+	}
+
+	tempFile := filepath.Join(os.TempDir(), "furryjan_icon.png")
+	if err := os.WriteFile(tempFile, iconData, 0644); err != nil {
+		return err
+	}
+	defer os.Remove(tempFile)
+
+	cmd := exec.Command("sudo", "cp", tempFile, "/usr/share/pixmaps/furryjan.png")
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	exec.Command("sudo", "chmod", "644", "/usr/share/pixmaps/furryjan.png").Run()
+	return nil
 }

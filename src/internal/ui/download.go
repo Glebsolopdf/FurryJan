@@ -23,19 +23,15 @@ func RunDownloadFlow(cfg *config.Config, database *db.DB) error {
 	fmt.Println("2) " + i18n.T("download", "popular"))
 	fmt.Println("3) " + i18n.T("download", "latest"))
 	fmt.Println("4) " + i18n.T("download", "highRated"))
-	fmt.Println("5) " + i18n.T("download", "author"))
-	fmt.Println("6) " + i18n.T("download", "cancel"))
+	fmt.Println("5) " + i18n.T("download", "cancel"))
 	fmt.Println("─────────────────────────────────────────────────────")
 
 	choice := Prompt(i18n.T("prompt", "choose"))
 
 	var tags []string
-	var authorMode bool
-	var authorName string
 
 	switch choice {
 	case "1":
-		PrintInfo(i18n.T("download", "tagInput"))
 		tagsInput := Prompt(i18n.T("download", "tagInput"))
 		if tagsInput == "" {
 			fmt.Println(i18n.T("download", "cancel"))
@@ -50,17 +46,6 @@ func RunDownloadFlow(cfg *config.Config, database *db.DB) error {
 	case "4":
 		tags = []string{"order:score"}
 	case "5":
-		// Search by author
-		PrintInfo(i18n.T("download", "authorInput"))
-		author := Prompt(i18n.T("download", "authorInput"))
-		if author == "" {
-			fmt.Println(i18n.T("download", "cancel"))
-			return nil
-		}
-		authorMode = true
-		authorName = author
-		tags = []string{fmt.Sprintf("author:%s", author)}
-	case "6":
 		return nil
 	default:
 		PrintError(i18n.T("prompt", "choose"))
@@ -91,19 +76,7 @@ func RunDownloadFlow(cfg *config.Config, database *db.DB) error {
 
 	downloadDir := cfg.DownloadDir
 
-	// Setup author directory if in author mode
-	if authorMode {
-		authorDir := filepath.Join(cfg.DownloadDir, "artlists", authorName)
-		err := CreateDirectoryWithSudo(authorDir)
-		if err != nil {
-			PrintError(fmt.Sprintf("%s: %v", i18n.T("error", "error"), err))
-			return nil
-		}
-		downloadDir = authorDir
-		PrintInfo(fmt.Sprintf("Searching author: %s", authorName))
-	} else {
-		PrintInfo(fmt.Sprintf("Searching posts with tags: %s", strings.Join(tags, " ")))
-	}
+	PrintInfo(fmt.Sprintf("Searching posts with tags: %s", strings.Join(tags, " ")))
 
 	opts := downloader.Options{
 		Tags:        tags,
@@ -155,11 +128,7 @@ func RunDownloadFlow(cfg *config.Config, database *db.DB) error {
 		result.Skipped,
 		result.Failed))
 	fmt.Println()
-	if authorMode {
-		PrintInfo(fmt.Sprintf("Author '%s' files saved in: %s", authorName, downloadDir))
-	} else {
-		PrintInfo(fmt.Sprintf("Files saved in: %s", result.DownloadDir))
-	}
+	PrintInfo(fmt.Sprintf("Files saved in: %s", result.DownloadDir))
 	fmt.Println()
 
 	WaitForEnter(i18n.T("prompt", "enterToContinue"))

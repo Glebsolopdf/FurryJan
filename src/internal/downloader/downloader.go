@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/schollz/progressbar/v3"
 
@@ -116,8 +117,9 @@ func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, er
 	}
 
 	progressSize := int64(opts.Limit)
-	if progressSize == 0 {
-		progressSize = 100
+	if progressSize <= 0 {
+		// Start with one page and increase max dynamically while scanning pages.
+		progressSize = 320
 	}
 
 	bar := progressbar.NewOptions64(
@@ -126,8 +128,12 @@ func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, er
 		progressbar.OptionShowBytes(false),
 		progressbar.OptionSetWidth(30),
 		progressbar.OptionShowCount(),
-		progressbar.OptionClearOnFinish(),
+		progressbar.OptionThrottle(120*time.Millisecond),
+		progressbar.OptionSetWriter(os.Stderr),
 	)
+
+	processed := int64(0)
+	knownTotal := progressSize
 
 	go func() {
 		<-sigChan
@@ -158,8 +164,18 @@ func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, er
 				break
 			}
 
+			bar.Describe(fmt.Sprintf("Скачивание | %s | стр:%d | ok:%d", tag, page, result.Downloaded))
+
 			if len(posts) == 0 {
 				break
+			}
+
+			if opts.Limit <= 0 {
+				pageTotal := int64(len(posts))
+				if processed+pageTotal > knownTotal {
+					knownTotal = processed + pageTotal
+					bar.ChangeMax64(knownTotal)
+				}
 			}
 
 			for _, post := range posts {
@@ -168,6 +184,10 @@ func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, er
 				}
 
 				if seenPosts[post.ID] {
+					if opts.Limit <= 0 {
+						processed++
+						bar.Add(1)
+					}
 					continue
 				}
 
@@ -179,16 +199,28 @@ func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, er
 
 				downloaded, err := database.IsDownloaded(post.ID)
 				if err != nil {
+					if opts.Limit <= 0 {
+						processed++
+						bar.Add(1)
+					}
 					result.Failed++
 					continue
 				}
 
 				if downloaded {
+					if opts.Limit <= 0 {
+						processed++
+						bar.Add(1)
+					}
 					result.Skipped++
 					continue
 				}
 
 				if !IsFileAllowed(post, allowedTypesMap, cfg.MaxSizeMB) {
+					if opts.Limit <= 0 {
+						processed++
+						bar.Add(1)
+					}
 					result.Skipped++
 					continue
 				}
@@ -197,19 +229,34 @@ func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, er
 					fmt.Printf("(dry-run) %d - %s\n", post.ID, post.File.URL)
 					tagCount++
 					result.Downloaded++
+					if opts.Limit <= 0 {
+						processed++
+						bar.Add(1)
+					} else {
+						bar.Add(1)
+					}
 					continue
 				}
 
 				err = downloadFile(cfg, database, post, opts.Tags, downloadDir)
 				if err != nil {
 					fmt.Printf("✗ Failed to download %d: %v\n", post.ID, err)
+					if opts.Limit <= 0 {
+						processed++
+						bar.Add(1)
+					}
 					result.Failed++
 					continue
 				}
 
 				tagCount++
 				result.Downloaded++
-				bar.Add(1)
+				if opts.Limit <= 0 {
+					processed++
+					bar.Add(1)
+				} else {
+					bar.Add(1)
+				}
 			}
 
 			if len(posts) < 320 {
@@ -225,6 +272,7 @@ func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, er
 	if cancelled {
 		fmt.Println()
 		fmt.Println("Загрузка отменена пользователем")
+
 	}
 
 	return result, nil
@@ -256,8 +304,6 @@ func downloadFile(cfg *config.Config, database *db.DB, post api.Post, userTags [
 	} else {
 		if len(post.Tags.General) > 0 {
 			targetTag = post.Tags.General[0]
-		} else if len(post.Tags.Artist) > 0 {
-			targetTag = post.Tags.Artist[0]
 		} else {
 			targetTag = "untagged"
 		}

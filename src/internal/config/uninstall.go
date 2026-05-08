@@ -44,6 +44,16 @@ func Uninstall() (string, error) {
 	cmdRmLocales.Stdin = strings.NewReader(password + "\n")
 	err3 := cmdRmLocales.Run()
 
+	// Remove desktop file with sudo
+	cmdRmDesktop := exec.Command("sudo", "-S", "rm", "-f", "/usr/share/applications/furryjan.desktop")
+	cmdRmDesktop.Stdin = strings.NewReader(password + "\n")
+	err4 := cmdRmDesktop.Run()
+
+	// Remove icon with sudo
+	cmdRmIcon := exec.Command("sudo", "-S", "rm", "-f", "/usr/share/pixmaps/furryjan.png")
+	cmdRmIcon.Stdin = strings.NewReader(password + "\n")
+	err5 := cmdRmIcon.Run()
+
 	// Return the first error if any, otherwise return nil
 	if err1 != nil {
 		return ex, err1
@@ -53,6 +63,12 @@ func Uninstall() (string, error) {
 	}
 	if err3 != nil {
 		return ex, err3
+	}
+	if err4 != nil {
+		return ex, err4
+	}
+	if err5 != nil {
+		return ex, err5
 	}
 
 	return ex, nil

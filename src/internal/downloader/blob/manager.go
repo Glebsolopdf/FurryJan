@@ -43,11 +43,26 @@ func FlushDefaultBlobWriter() error {
 		return nil
 	}
 
-	// Close the write channel to signal end of data
+	// Signal writer to stop and close the channel safely
 	bw.mu.Lock()
+	if bw.stopped {
+		// Already stopped, just return
+		bw.mu.Unlock()
+		return nil
+	}
+	bw.stopped = true
 	bw.stopFlag = true
-	bw.cancel()
-	close(bw.writeCh)
+
+	// Safely close the channel using recover to avoid panic on double-close
+	func() {
+		defer func() {
+			recover() // Ignore any panic from closing already-closed channel
+		}()
+		if !bw.channelClosed {
+			close(bw.writeCh)
+			bw.channelClosed = true
+		}
+	}()
 	bw.mu.Unlock()
 
 	// Wait for writer to finish
@@ -80,7 +95,6 @@ func CleanupDefaultBlobWriter() error {
 	// Remove base files
 	_ = os.Remove(basePath)
 	_ = os.Remove(baseIndex)
-
 
 	for i := 1; i <= bw.rotationSeq; i++ {
 		numberedPath := fmt.Sprintf("%s.%d", basePath, i)

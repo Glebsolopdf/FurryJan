@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-
-	"github.com/schollz/progressbar/v3"
 )
 
 // BlobWriter aggregates many small files into a single large blob on disk
@@ -21,10 +19,12 @@ type BlobWriter struct {
 	bufSize       int
 	rotationSeq   int    // current blob file sequence number
 	autoRotate    bool   // automatically restart after flush to free RAM
-	autoCleanup   bool   // automatically delete blob files after each flush
+	autoCleanup   bool   // automatically delete blob files after each cleanup
 	baseOutPath   string // base path without sequence number
 	baseIndexPath string // base path without sequence number
 	stopFlag      bool   // signal to stop instead of auto-rotate
+	stopped       bool   // tracks if writer has been stopped
+	channelClosed bool   // tracks if writeCh has been closed
 	logLevel      string // logging level: "DEBUG", "INFO", "WARN", "ERROR"
 
 	mu      sync.Mutex
@@ -68,6 +68,8 @@ func NewBlobWriter(outPath, indexPath string, bufSize int, autoRotate bool, auto
 		baseIndexPath: indexPath,
 		rotationSeq:   1,
 		stopFlag:      false,
+		stopped:       false,
+		channelClosed: false,
 		writeCh:       make(chan *blobTask, 256),
 		doneCh:        make(chan error, 1),
 		ctx:           ctx,
@@ -121,13 +123,24 @@ func (b *BlobWriter) debugLog(format string, args ...interface{}) {
 // Close gracefully shuts down the writer and waits for final flush.
 func (b *BlobWriter) Close() error {
 	b.mu.Lock()
-	if !b.started {
+	if !b.started || b.stopped {
 		b.mu.Unlock()
 		return nil
 	}
+	b.stopped = true
 	b.debugLog("[BlobWriter] Close() called, signaling graceful shutdown\n")
 	b.stopFlag = true
-	close(b.writeCh)
+
+	// Safely close the channel
+	func() {
+		defer func() {
+			recover() // Ignore panic from closing already-closed channel
+		}()
+		if !b.channelClosed {
+			close(b.writeCh)
+			b.channelClosed = true
+		}
+	}()
 	b.mu.Unlock()
 
 	// Wait for goroutine to finish (with implicit timeout from context)
@@ -213,33 +226,23 @@ func (b *BlobWriter) run() {
 			}
 		}
 
-		// Flush and fsync with progress bar
+		// Flush and fsync
 		b.debugLog("[BlobWriter] Flushing %d files (%.1f MB total) to disk...\n", fileCount, float64(bufferedSize)/(1024*1024))
-
-		// Create progress bar for writing
-		bar := progressbar.NewOptions64(
-			bufferedSize,
-			progressbar.OptionSetDescription("Завершение и запись на диск"),
-			progressbar.OptionShowBytes(true),
-			progressbar.OptionSetWidth(30),
-		)
+		if !blobWriterSilent {
+			fmt.Printf("[BlobWriter] Завершение и запись на диск: %d файлов, %.1f MB\n", fileCount, float64(bufferedSize)/(1024*1024))
+		}
 
 		if err := w.Flush(); err != nil {
-			bar.Close()
 			f.Close()
 			b.doneCh <- fmt.Errorf("flush: %w", err)
 			return
 		}
-		bar.Add64(bufferedSize / 2) // Show half progress after flush
 
 		if err := f.Sync(); err != nil {
-			bar.Close()
 			f.Close()
 			b.doneCh <- fmt.Errorf("fsync: %w", err)
 			return
 		}
-		bar.Add64(bufferedSize - bufferedSize/2) // Complete the progress bar
-		bar.Finish()
 		if !blobWriterSilent {
 			fmt.Printf("[BlobWriter] ✅ Successfully wrote %.1f MB to disk\n", float64(bufferedSize)/(1024*1024))
 		}

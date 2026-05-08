@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/schollz/progressbar/v3"
 )
 
 func ExtractAndCleanupDefaultBlobWriter(baseDir string) error {
@@ -86,30 +84,11 @@ func ExtractBlobFile(blobPath, indexPath, baseDir string) error {
 	}
 	defer blobFile.Close()
 
-	// Calculate total size for progress bar
-	var totalSize int64
-	for _, entry := range index {
-		totalSize += entry.Size
-	}
-
-	// Create progress bar for extraction (silent unless verbose)
-	var bar *progressbar.ProgressBar
 	if !blobWriterSilent {
-		bar = progressbar.NewOptions64(
-			totalSize,
-			progressbar.OptionSetDescription("Распаковка файлов"),
-			progressbar.OptionShowBytes(true),
-			progressbar.OptionSetWidth(30),
-			progressbar.OptionShowCount(),
-			progressbar.OptionClearOnFinish(),
-		)
+		fmt.Printf("[BlobWriter] Распаковка: %d файлов\n", len(index))
 	}
 
-	defer func() {
-		if bar != nil {
-			bar.Close()
-		}
-	}()
+	extractedCount := 0
 
 	// Extract each file
 	for fileName, entry := range index {
@@ -118,35 +97,24 @@ func ExtractBlobFile(blobPath, indexPath, baseDir string) error {
 		dir := filepath.Dir(fullPath)
 
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			if bar != nil {
-				bar.Add64(entry.Size)
-			}
 			continue
 		}
 
 		// Read data from blob
 		data := make([]byte, entry.Size)
 		if _, err := blobFile.ReadAt(data, entry.Offset); err != nil {
-			if bar != nil {
-				bar.Add64(entry.Size)
-			}
 			continue
 		}
 
 		if err := os.WriteFile(fullPath, data, 0644); err != nil {
-			if bar != nil {
-				bar.Add64(entry.Size)
-			}
 			continue
 		}
 
-		if bar != nil {
-			bar.Add64(entry.Size)
-		}
+		extractedCount++
 	}
 
 	if !blobWriterSilent {
-		fmt.Printf("[BlobWriter] ✅ Extracted %d files from blob\n", len(index))
+		fmt.Printf("[BlobWriter] ✅ Extracted %d files from blob\n", extractedCount)
 	}
 	return nil
 }
