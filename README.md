@@ -18,7 +18,7 @@ Features pagination, deduplication via SQLite, tag-based folder organization, an
 
 ## Installation
 
-### Quick Install (Linux/macOS)
+### Quick Install (Linux)
 
 ```bash
 chmod +x install.sh && ./install.sh
