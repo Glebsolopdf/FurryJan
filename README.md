@@ -116,7 +116,6 @@ Search Type Selection:
  2) Popular (order:hot)
  3) Latest (order:latest)
  4) High-Rated (order:score)
- 5) By Author
  > 1
 
 Enter tags separated by space: dragon
