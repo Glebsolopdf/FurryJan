@@ -1,6 +1,6 @@
 # Furryjan — E621 Content Downloader
 
-![Preview](preview.png)
+!(preview.png)
 
 A powerful CLI utility written in Go for downloading content from [e621.net](https://e621.net) by tags.  
 Fully interactive interface — no flags needed, everything through menus and helpful prompts.  
@@ -18,7 +18,7 @@ Features pagination, deduplication via SQLite, tag-based folder organization, an
 
 ## Installation
 
-### Quick Install (Linux/macOS)
+### Quick Install (Linux)
 
 ```bash
 chmod +x install.sh && ./install.sh
