@@ -1,4 +1,5 @@
 # Furryjan — E621 Content Downloader
+⚠️The program is still rough and requires further corrections! It may load the processor and RAM!
 
 ![Preview](forreadme/preview.png)
 
