@@ -85,7 +85,7 @@ Step 3/4  Download folder (Enter = /home/user/Downloads/Furryjan):
 ✓ Config saved: /home/user/.config/furryjan/config.json
 ```
 
-Your API key is stored securely locally. You can find it in your e621 account settings.
+Your API key is stored locally. You can find it in your e621 account settings.
 
 ---
 
