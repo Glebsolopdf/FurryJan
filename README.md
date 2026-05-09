@@ -478,8 +478,7 @@ MIT License - See [LICENSE](LICENSE) file for details
 ## Support
 
 For issues, suggestions, or improvements:
-1. Check the [existing documentation](src/api.md)
-2. Verify your configuration in settings
-3. Review your API key permissions
+1. Verify your configuration in settings
+2. Review your API key permissions
 
 ![Enjoy](forreadme/enjoy.png)
