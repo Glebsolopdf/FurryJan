@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	SchemaVersion = 1
+	SchemaVersion = 2
 )
 
 // DB wraps SQLite database
@@ -71,23 +71,57 @@ func (d *DB) migrate() error {
 		return err
 	}
 
-	if version < SchemaVersion {
-		err = d.migrateV1()
-		if err != nil {
+	if version < 1 {
+		if err := d.migrateV1(); err != nil {
 			return err
 		}
+		version = 1
+	}
 
-		if version == 0 {
-			_, err = d.conn.Exec("INSERT INTO schema_version (version) VALUES (?)", SchemaVersion)
-		} else {
-			_, err = d.conn.Exec("UPDATE schema_version SET version = ?", SchemaVersion)
-		}
-		if err != nil {
+	if version < 2 {
+		if err := d.migrateV2(); err != nil {
 			return err
 		}
+		version = 2
+	}
+
+	if version < SchemaVersion {
+		version = SchemaVersion
+	}
+
+	if err == sql.ErrNoRows {
+		_, err = d.conn.Exec("INSERT INTO schema_version (version) VALUES (?)", version)
+	} else {
+		_, err = d.conn.Exec("UPDATE schema_version SET version = ?", version)
+	}
+	if err != nil {
+		return err
 	}
 
 	return nil
+}
+
+func (d *DB) migrateV2() error {
+	_, err := d.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS blob_entries (
+			post_id       INTEGER     NOT NULL,
+			blob_path     TEXT        NOT NULL,
+			file_name     TEXT        NOT NULL,
+			offset        INTEGER     NOT NULL,
+			size          INTEGER     NOT NULL,
+			created_at    DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (post_id, blob_path)
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = d.conn.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_blob_entries_blob_path
+		ON blob_entries(blob_path)
+	`)
+	return err
 }
 
 func (d *DB) migrateV1() error {

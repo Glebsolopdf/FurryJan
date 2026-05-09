@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"sync"
+
+	"furryjan/internal/db"
 )
 
 // Package-level default writer and helpers
@@ -14,13 +16,13 @@ var (
 )
 
 // StartDefaultBlobWriter initializes and starts the package default BlobWriter
-func StartDefaultBlobWriter(outPath, indexPath string, bufSizeBytes int, autoCleanup bool, logLevel string) error {
+func StartDefaultBlobWriter(outPath, indexPath string, bufSizeBytes int, autoCleanup bool, logLevel string, database *db.DB) error {
 	defaultMu.Lock()
 	defer defaultMu.Unlock()
 	if defaultBlobWriter != nil && defaultBlobWriter.isStarted() {
 		return fmt.Errorf("default blob writer already running")
 	}
-	bw := NewBlobWriter(outPath, indexPath, bufSizeBytes, true, autoCleanup, logLevel)
+	bw := NewBlobWriter(outPath, indexPath, bufSizeBytes, autoCleanup, logLevel, database)
 	if err := bw.Start(); err != nil {
 		return err
 	}
@@ -43,31 +45,7 @@ func FlushDefaultBlobWriter() error {
 		return nil
 	}
 
-	// Signal writer to stop and close the channel safely
-	bw.mu.Lock()
-	if bw.stopped {
-		// Already stopped, just return
-		bw.mu.Unlock()
-		return nil
-	}
-	bw.stopped = true
-	bw.stopFlag = true
-
-	// Safely close the channel using recover to avoid panic on double-close
-	func() {
-		defer func() {
-			recover() // Ignore any panic from closing already-closed channel
-		}()
-		if !bw.channelClosed {
-			close(bw.writeCh)
-			bw.channelClosed = true
-		}
-	}()
-	bw.mu.Unlock()
-
-	// Wait for writer to finish
-	err := <-bw.doneCh
-	return err
+	return bw.Flush()
 }
 
 func StopDefaultBlobWriter() error {
@@ -116,7 +94,7 @@ func DefaultBlobActive() bool {
 }
 
 // EnqueueDefaultBlobWriter enqueues data into the default blob writer
-func EnqueueDefaultBlobWriter(name string, data []byte) (string, int64, error) {
+func EnqueueDefaultBlobWriter(postID int, name string, data []byte) (string, int64, error) {
 	defaultMu.Lock()
 	bw := defaultBlobWriter
 	defaultMu.Unlock()
@@ -125,5 +103,5 @@ func EnqueueDefaultBlobWriter(name string, data []byte) (string, int64, error) {
 		return "", 0, fmt.Errorf("blob writer not running")
 	}
 
-	return bw.Enqueue(name, data)
+	return bw.Enqueue(postID, name, data)
 }

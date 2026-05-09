@@ -8,6 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
+
+	"furryjan/internal/db"
 )
 
 // BlobWriter aggregates many small files into a single large blob on disk
@@ -17,18 +20,17 @@ type BlobWriter struct {
 	outPath       string
 	indexPath     string
 	bufSize       int
-	rotationSeq   int    // current blob file sequence number
-	autoRotate    bool   // automatically restart after flush to free RAM
+	flushInterval time.Duration
+	rotationSeq   int
 	autoCleanup   bool   // automatically delete blob files after each cleanup
 	baseOutPath   string // base path without sequence number
 	baseIndexPath string // base path without sequence number
-	stopFlag      bool   // signal to stop instead of auto-rotate
-	stopped       bool   // tracks if writer has been stopped
-	channelClosed bool   // tracks if writeCh has been closed
 	logLevel      string // logging level: "DEBUG", "INFO", "WARN", "ERROR"
+	indexStore    IndexStore
 
 	mu      sync.Mutex
 	started bool
+	closed  bool
 
 	writeCh chan *blobTask
 	doneCh  chan error
@@ -37,6 +39,7 @@ type BlobWriter struct {
 }
 
 type blobTask struct {
+	postID int
 	name   string
 	data   []byte
 	result chan blobResult
@@ -48,11 +51,16 @@ type blobResult struct {
 	err    error
 }
 
+type IndexStore interface {
+	UpsertBlobEntry(postID int, blobPath, fileName string, offset, size int64) error
+	ListBlobEntries(blobPath string) ([]db.BlobEntry, error)
+	DeleteBlobEntries(blobPath string) error
+}
+
 // NewBlobWriter creates a BlobWriter instance. bufSize is in bytes.
-// If autoRotate is true, it will automatically restart and create new blob files after each flush.
 // If autoCleanup is true, it will delete blob files after flushing.
 // logLevel controls logging verbosity: "DEBUG", "INFO", "WARN", "ERROR"
-func NewBlobWriter(outPath, indexPath string, bufSize int, autoRotate bool, autoCleanup bool, logLevel string) *BlobWriter {
+func NewBlobWriter(outPath, indexPath string, bufSize int, autoCleanup bool, logLevel string, indexStore IndexStore) *BlobWriter {
 	if logLevel == "" {
 		logLevel = "INFO"
 	}
@@ -61,15 +69,13 @@ func NewBlobWriter(outPath, indexPath string, bufSize int, autoRotate bool, auto
 		outPath:       outPath,
 		indexPath:     indexPath,
 		bufSize:       bufSize,
-		autoRotate:    autoRotate,
+		flushInterval: 30 * time.Second,
 		autoCleanup:   autoCleanup,
 		logLevel:      logLevel,
+		indexStore:    indexStore,
 		baseOutPath:   outPath,
 		baseIndexPath: indexPath,
 		rotationSeq:   1,
-		stopFlag:      false,
-		stopped:       false,
-		channelClosed: false,
 		writeCh:       make(chan *blobTask, 256),
 		doneCh:        make(chan error, 1),
 		ctx:           ctx,
@@ -88,11 +94,11 @@ func (b *BlobWriter) Start() error {
 	return nil
 }
 
-func (b *BlobWriter) Enqueue(name string, data []byte) (string, int64, error) {
+func (b *BlobWriter) Enqueue(postID int, name string, data []byte) (string, int64, error) {
 	if !b.isStarted() {
 		return "", 0, fmt.Errorf("blob writer not started")
 	}
-	t := &blobTask{name: filepath.ToSlash(name), data: data, result: make(chan blobResult, 1)}
+	t := &blobTask{postID: postID, name: filepath.ToSlash(name), data: data, result: make(chan blobResult, 1)}
 	select {
 	case b.writeCh <- t:
 		res := <-t.result
@@ -122,39 +128,50 @@ func (b *BlobWriter) debugLog(format string, args ...interface{}) {
 // Close signals the writer to finish and waits for it to flush and write index.
 // Close gracefully shuts down the writer and waits for final flush.
 func (b *BlobWriter) Close() error {
+	return b.closeWithCleanup(b.autoCleanup)
+}
+
+// CloseWithoutCleanup stops the writer but keeps blob artifacts on disk.
+func (b *BlobWriter) CloseWithoutCleanup() error {
+	return b.closeWithCleanup(false)
+}
+
+func (b *BlobWriter) closeWithCleanup(withCleanup bool) error {
 	b.mu.Lock()
-	if !b.started || b.stopped {
+	if !b.started || b.closed {
 		b.mu.Unlock()
 		return nil
 	}
-	b.stopped = true
+	b.closed = true
 	b.debugLog("[BlobWriter] Close() called, signaling graceful shutdown\n")
-	b.stopFlag = true
-
-	// Safely close the channel
-	func() {
-		defer func() {
-			recover() // Ignore panic from closing already-closed channel
-		}()
-		if !b.channelClosed {
-			close(b.writeCh)
-			b.channelClosed = true
-		}
-	}()
+	close(b.writeCh)
 	b.mu.Unlock()
 
-	// Wait for goroutine to finish (with implicit timeout from context)
-	// Don't cancel context yet - let goroutine finish naturally
 	err := <-b.doneCh
 	b.debugLog("[BlobWriter] Shutdown complete, err=%v\n", err)
 	b.cancel()
 
-	if b.autoCleanup && err == nil {
+	if withCleanup && err == nil {
 		b.debugLog("[BlobWriter] Cleaning up blob files...\n")
 		b.cleanupAllBlobs()
 	}
 
 	return err
+}
+
+func (b *BlobWriter) Flush() error {
+	if !b.isStarted() {
+		return nil
+	}
+
+	ack := make(chan blobResult, 1)
+	select {
+	case b.writeCh <- &blobTask{result: ack}:
+		res := <-ack
+		return res.err
+	case <-b.ctx.Done():
+		return b.ctx.Err()
+	}
 }
 
 func (b *BlobWriter) cleanupAllBlobs() {
@@ -181,122 +198,119 @@ func (b *BlobWriter) cleanupAllBlobs() {
 }
 
 func (b *BlobWriter) run() {
+	indexPath := b.baseIndexPath
+	f, err := os.OpenFile(b.baseOutPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		b.doneCh <- fmt.Errorf("open output: %w", err)
+		return
+	}
+	defer f.Close()
+
+	w := bufio.NewWriterSize(f, b.bufSize)
+	ticker := time.NewTicker(b.flushInterval)
+	defer ticker.Stop()
+
+	b.debugLog("[BlobWriter] Started with %d MB buffer, writing to: %s\n", b.bufSize/(1024*1024), b.baseOutPath)
+
+	idx := make(map[string]struct {
+		Offset int64 `json:"offset"`
+		Size   int64 `json:"size"`
+	})
+	var offset int64
+	var pendingBytes int64
+	fileCount := 0
+
+	flushToDisk := func(reason string) error {
+		if pendingBytes == 0 {
+			return nil
+		}
+		if err := w.Flush(); err != nil {
+			return fmt.Errorf("flush: %w", err)
+		}
+		if err := f.Sync(); err != nil {
+			return fmt.Errorf("fsync: %w", err)
+		}
+
+		if b.indexStore == nil {
+			tmp := indexPath + ".tmp"
+			tf, err := os.Create(tmp)
+			if err != nil {
+				return fmt.Errorf("create index tmp: %w", err)
+			}
+			enc := json.NewEncoder(tf)
+			if err := enc.Encode(idx); err != nil {
+				tf.Close()
+				return fmt.Errorf("encode index: %w", err)
+			}
+			tf.Close()
+			if err := os.Rename(tmp, indexPath); err != nil {
+				return fmt.Errorf("rename index: %w", err)
+			}
+		}
+
+		if !blobWriterSilent {
+			fmt.Printf("[BlobWriter] Flushed %.1f MB to disk (%s)\n", float64(pendingBytes)/(1024*1024), reason)
+		}
+		pendingBytes = 0
+		return nil
+	}
+
 	for {
-		outPath := b.baseOutPath
-		indexPath := b.baseIndexPath
-		if b.rotationSeq > 1 {
-			outPath = fmt.Sprintf("%s.%d", b.baseOutPath, b.rotationSeq)
-			indexPath = fmt.Sprintf("%s.%d", b.baseIndexPath, b.rotationSeq)
-		}
-
-		f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-		if err != nil {
-			b.doneCh <- fmt.Errorf("open output: %w", err)
+		select {
+		case <-b.ctx.Done():
+			if err := flushToDisk("context cancel"); err != nil {
+				b.doneCh <- err
+				return
+			}
+			b.doneCh <- nil
 			return
-		}
+		case <-ticker.C:
+			if err := flushToDisk("timer"); err != nil {
+				b.doneCh <- err
+				return
+			}
+		case task, ok := <-b.writeCh:
+			if !ok {
+				if err := flushToDisk("shutdown"); err != nil {
+					b.doneCh <- err
+					return
+				}
+				b.doneCh <- nil
+				return
+			}
 
-		w := bufio.NewWriterSize(f, b.bufSize)
-		b.debugLog("[BlobWriter] Started with %d MB buffer, writing to: %s (seq=%d)\n", b.bufSize/(1024*1024), outPath, b.rotationSeq)
-		idx := make(map[string]struct {
-			Offset int64 `json:"offset"`
-			Size   int64 `json:"size"`
-		})
-		var offset int64
-		var bufferedSize int64
-		fileCount := 0
+			// Empty task is an explicit flush request.
+			if task.name == "" && len(task.data) == 0 {
+				task.result <- blobResult{err: flushToDisk("manual")}
+				continue
+			}
 
-		// Drain loop: read until channel closed or rotation needed
-		for task := range b.writeCh {
 			n, err := w.Write(task.data)
 			if err != nil {
 				task.result <- blobResult{err: err}
-				f.Close()
 				continue
 			}
+
 			idx[task.name] = struct {
 				Offset int64 `json:"offset"`
 				Size   int64 `json:"size"`
 			}{Offset: offset, Size: int64(n)}
+
+			if b.indexStore != nil {
+				if err := b.indexStore.UpsertBlobEntry(task.postID, b.baseOutPath, task.name, offset, int64(n)); err != nil {
+					task.result <- blobResult{err: fmt.Errorf("persist blob index: %w", err)}
+					continue
+				}
+			}
+
 			task.result <- blobResult{offset: offset, size: int64(n), err: nil}
 			offset += int64(n)
-			bufferedSize += int64(n)
+			pendingBytes += int64(n)
 			fileCount++
+
 			if fileCount%10 == 0 {
-				b.debugLog("[BlobWriter] Buffered: %d files, %.1f MB (no disk write yet)\n", fileCount, float64(bufferedSize)/(1024*1024))
+				b.debugLog("[BlobWriter] Buffered: %d files\n", fileCount)
 			}
-		}
-
-		// Flush and fsync
-		b.debugLog("[BlobWriter] Flushing %d files (%.1f MB total) to disk...\n", fileCount, float64(bufferedSize)/(1024*1024))
-		if !blobWriterSilent {
-			fmt.Printf("[BlobWriter] Завершение и запись на диск: %d файлов, %.1f MB\n", fileCount, float64(bufferedSize)/(1024*1024))
-		}
-
-		if err := w.Flush(); err != nil {
-			f.Close()
-			b.doneCh <- fmt.Errorf("flush: %w", err)
-			return
-		}
-
-		if err := f.Sync(); err != nil {
-			f.Close()
-			b.doneCh <- fmt.Errorf("fsync: %w", err)
-			return
-		}
-		if !blobWriterSilent {
-			fmt.Printf("[BlobWriter] ✅ Successfully wrote %.1f MB to disk\n", float64(bufferedSize)/(1024*1024))
-		}
-		f.Close()
-
-		// Write index atomically
-		tmp := indexPath + ".tmp"
-		tf, err := os.Create(tmp)
-		if err != nil {
-			b.doneCh <- fmt.Errorf("create index tmp: %w", err)
-			return
-		}
-		enc := json.NewEncoder(tf)
-		if err := enc.Encode(idx); err != nil {
-			tf.Close()
-			b.doneCh <- fmt.Errorf("encode index: %w", err)
-			return
-		}
-		tf.Close()
-		if err := os.Rename(tmp, indexPath); err != nil {
-			b.doneCh <- fmt.Errorf("rename index: %w", err)
-			return
-		}
-
-		if !blobWriterSilent {
-			fmt.Printf("[BlobWriter] Index written to: %s, memory freed\n", indexPath)
-		}
-
-		// Note: Don't delete blob files here - they'll be extracted and cleaned up in ExtractAndCleanup()
-
-		// Check if we should stop or continue rotating
-		b.mu.Lock()
-		shouldStop := b.stopFlag
-		b.mu.Unlock()
-
-		if shouldStop {
-			b.debugLog("[BlobWriter] Stop flag set, exiting\n")
-			b.doneCh <- nil
-			return
-		}
-
-		// Auto-rotate: restart the loop with a new blob file and sequence number
-		b.debugLog("[BlobWriter] Auto-rotating to next blob file...\n")
-		b.rotationSeq++
-
-		// Recreate writeCh for next iteration (old one is closed)
-		// Check context first to avoid unnecessary allocation
-		select {
-		case <-b.ctx.Done():
-			b.debugLog("[BlobWriter] Context cancelled during rotation\n")
-			b.doneCh <- nil
-			return
-		default:
-			b.writeCh = make(chan *blobTask, 256)
 		}
 	}
 }

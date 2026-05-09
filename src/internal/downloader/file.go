@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +13,7 @@ import (
 	"furryjan/internal/downloader/blob"
 )
 
-func DownloadFileToDir(cfg *config.Config, targetDir string, post api.Post) (string, error) {
+func DownloadFileToDir(ctx context.Context, cfg *config.Config, targetDir string, post api.Post) (string, error) {
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create directory: %w", err)
 	}
@@ -23,7 +24,7 @@ func DownloadFileToDir(cfg *config.Config, targetDir string, post api.Post) (str
 	blobActive := blob.DefaultBlobActive() && cfg.BlobWriterEnabled
 	if blobActive {
 		client := api.NewClientWithTimeout(cfg.Username, cfg.APIKey, cfg.RateLimitMS, api.DownloadTimeout)
-		resp, err := client.DownloadFileWithProgress(post.File.URL, post.File.Size)
+		resp, err := client.DownloadFileWithProgressCtx(ctx, post.File.URL, post.File.Size)
 		if err != nil {
 			return "", fmt.Errorf("failed to download: %w", err)
 		}
@@ -35,7 +36,7 @@ func DownloadFileToDir(cfg *config.Config, targetDir string, post api.Post) (str
 		}
 
 		rel := filepath.ToSlash(filepath.Join(filepath.Base(targetDir), fileName))
-		ref, _, err := blob.EnqueueDefaultBlobWriter(rel, buf.Bytes())
+		ref, _, err := blob.EnqueueDefaultBlobWriter(post.ID, rel, buf.Bytes())
 		if err != nil {
 			return "", fmt.Errorf("blob enqueue failed: %w", err)
 		}
@@ -53,7 +54,7 @@ func DownloadFileToDir(cfg *config.Config, targetDir string, post api.Post) (str
 	defer outFile.Close()
 
 	client := api.NewClientWithTimeout(cfg.Username, cfg.APIKey, cfg.RateLimitMS, api.DownloadTimeout)
-	resp, err := client.DownloadFileWithProgress(post.File.URL, post.File.Size)
+	resp, err := client.DownloadFileWithProgressCtx(ctx, post.File.URL, post.File.Size)
 	if err != nil {
 		os.Remove(filePath)
 		return "", fmt.Errorf("failed to download: %w", err)

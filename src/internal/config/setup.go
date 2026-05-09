@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -94,11 +95,12 @@ func RunSetup() (*Config, error) {
 	langChoice = strings.TrimSpace(langChoice)
 
 	if langChoice == ".delete" {
-		_, err := Uninstall()
+		_, err := Uninstall(context.Background())
 		if err != nil {
 			fmt.Printf("Error during uninstallation: %v\n", err)
+			return nil, err
 		}
-		os.Exit(0)
+		return nil, ErrSetupCancelled
 	}
 
 	language := "en"

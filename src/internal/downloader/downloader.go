@@ -1,12 +1,11 @@
 package downloader
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/schollz/progressbar/v3"
@@ -74,7 +73,12 @@ func IsFileAllowed(post api.Post, allowedTypesMap map[string]bool, maxSizeMB int
 	return true
 }
 
-func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, error) {
+func Run(parentCtx context.Context, cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, error) {
+	ctx := parentCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	client := api.NewClient(cfg.Username, cfg.APIKey, cfg.RateLimitMS)
 
 	result := &DownloadResult{}
@@ -104,8 +108,6 @@ func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, er
 	}
 	fmt.Println()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	var cancelled bool
 
 	var perTagLimit int
@@ -136,9 +138,9 @@ func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, er
 	knownTotal := progressSize
 
 	go func() {
-		<-sigChan
+		<-ctx.Done()
 		cancelled = true
-		bar.Close()
+		_ = bar.Close()
 	}()
 
 	for _, tag := range opts.Tags {
@@ -158,8 +160,12 @@ func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, er
 				break
 			}
 
-			posts, err := client.GetPosts([]string{tag}, 320, page)
+			posts, err := client.GetPostsCtx(ctx, []string{tag}, 320, page)
 			if err != nil {
+				if ctx.Err() != nil {
+					cancelled = true
+					break
+				}
 				fmt.Printf("Warning: Failed to fetch posts for tag '%s': %v\n", tag, err)
 				break
 			}
@@ -238,8 +244,12 @@ func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, er
 					continue
 				}
 
-				err = downloadFile(cfg, database, post, opts.Tags, downloadDir)
+				err = downloadFile(ctx, cfg, database, post, opts.Tags, downloadDir)
 				if err != nil {
+					if ctx.Err() != nil {
+						cancelled = true
+						break
+					}
 					fmt.Printf("✗ Failed to download %d: %v\n", post.ID, err)
 					if opts.Limit <= 0 {
 						processed++
@@ -279,12 +289,12 @@ func Run(cfg *config.Config, database *db.DB, opts Options) (*DownloadResult, er
 }
 
 // downloadFile downloads a single file with tag-based directory selection
-func downloadFile(cfg *config.Config, database *db.DB, post api.Post, userTags []string, baseDownloadDir string) error {
+func downloadFile(ctx context.Context, cfg *config.Config, database *db.DB, post api.Post, userTags []string, baseDownloadDir string) error {
 	// Check if this is a special order: filter
 	if len(userTags) > 0 && strings.HasPrefix(userTags[0], "order:") {
 		filterName := strings.TrimPrefix(userTags[0], "order:")
 		targetDir := filepath.Join(baseDownloadDir, filterName)
-		savedPath, err := DownloadFileToDir(cfg, targetDir, post)
+		savedPath, err := DownloadFileToDir(ctx, cfg, targetDir, post)
 		if err != nil {
 			return err
 		}
@@ -310,7 +320,7 @@ func downloadFile(cfg *config.Config, database *db.DB, post api.Post, userTags [
 	}
 
 	targetDir := filepath.Join(baseDownloadDir, targetTag)
-	savedPath, err := DownloadFileToDir(cfg, targetDir, post)
+	savedPath, err := DownloadFileToDir(ctx, cfg, targetDir, post)
 	if err != nil {
 		return err
 	}

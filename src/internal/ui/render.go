@@ -2,11 +2,13 @@ package ui
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -17,6 +19,12 @@ var (
 	globalReader *bufio.Reader
 	readerOnce   sync.Once
 )
+
+const exitInputSentinel = ".exit"
+
+func IsExitInput(s string) bool {
+	return strings.EqualFold(strings.TrimSpace(s), exitInputSentinel)
+}
 
 func getReader() *bufio.Reader {
 	readerOnce.Do(func() {
@@ -63,7 +71,10 @@ func Prompt(message string) string {
 	fmt.Print(message)
 	input, err := getReader().ReadString('\n')
 	if err != nil {
-		log.Printf("Error reading input: %v", err)
+		if !errors.Is(err, io.EOF) {
+			log.Printf("Error reading input: %v", err)
+		}
+		return exitInputSentinel
 	}
 	return strings.TrimSpace(input)
 }
@@ -111,46 +122,6 @@ func Truncate(s string, maxLen int) string {
 	return s + strings.Repeat(" ", maxLen-len(s))
 }
 
-func CreateDirectoryWithSudo(path string) error {
-	// First, try to create normally
-	err := os.MkdirAll(path, 0755)
-	if err == nil {
-		return nil
-	}
-
-	// If it failed and we're on Linux, offer sudo
-	if runtime.GOOS == "linux" && strings.Contains(err.Error(), "permission denied") {
-		fmt.Println()
-		PrintError("Ошибка: нет разрешения на создание папки")
-		if Confirm("Попробовать с sudo?", false) {
-			fmt.Println()
-			password := PromptPassword("Введите пароль: ")
-
-			cmd := exec.Command("sudo", "-S", "mkdir", "-p", path)
-			cmd.Stdin = strings.NewReader(password + "\n")
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-
-			err = cmd.Run()
-			if err != nil {
-				return fmt.Errorf("не удалось создать папку: %w", err)
-			}
-
-			// Change ownership to current user
-			currentUser := os.Getenv("USER")
-			if currentUser != "" {
-				chownCmd := exec.Command("sudo", "-S", "chown", currentUser+":"+currentUser, path)
-				chownCmd.Stdin = strings.NewReader(password + "\n")
-				chownCmd.Run() // Ignore errors
-			}
-
-			return nil
-		}
-	}
-
-	return err
-}
-
 // PromptPassword reads password input without echoing
 func PromptPassword(message string) string {
 	fmt.Print(message)
@@ -171,20 +142,20 @@ func BoolToString(b bool) string {
 	return "Нет"
 }
 
-func RestartApplication() {
+func RestartApplication(ctx context.Context) error {
 	exePath, err := os.Executable()
 	if err != nil {
-		PrintError(fmt.Sprintf("Ошибка при перезапуске: %v", err))
-		return
+		return fmt.Errorf("ошибка при перезапуске: %w", err)
 	}
 
-	// Start new process and exit current one immediately to free resources
-	err = exec.Command(exePath).Start()
+	cmd := exec.CommandContext(ctx, exePath)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err = cmd.Start()
 	if err != nil {
-		PrintError(fmt.Sprintf("Ошибка при перезапуске: %v", err))
-		return
+		return fmt.Errorf("ошибка при перезапуске: %w", err)
 	}
 
-	// Kill current process to free all resources
-	os.Exit(0)
+	return ErrRestartRequested
 }

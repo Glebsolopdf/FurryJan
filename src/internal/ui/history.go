@@ -22,6 +22,9 @@ func RunHistoryFlow(cfg *config.Config, database *db.DB) error {
 		fmt.Println("─────────────────────────────────────────────────────")
 
 		choice := Prompt(i18n.T("prompt", "choose"))
+		if IsExitInput(choice) {
+			return ErrExitRequested
+		}
 
 		switch choice {
 		case "1":
@@ -41,6 +44,9 @@ func RunHistoryFlow(cfg *config.Config, database *db.DB) error {
 
 		case "2":
 			tag := Prompt(i18n.T("history", "enterTagFilter"))
+			if IsExitInput(tag) {
+				return ErrExitRequested
+			}
 			if tag == "" {
 				break
 			}

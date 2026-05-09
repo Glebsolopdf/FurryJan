@@ -1,12 +1,12 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 
 	"furryjan/i18n"
 	"furryjan/internal/config"
@@ -16,152 +16,116 @@ import (
 )
 
 func main() {
-	exitCode := 0
-	defer func() {
-		log.Printf("[Shutdown] Cleaning up resources...")
+	if err := run(); err != nil {
+		log.Printf("Application failed: %v", err)
+		os.Exit(1)
+	}
+}
 
-		// Kill all related processes gracefully
-		log.Printf("[Shutdown] Terminating background processes...")
-		killProcesses()
-
-		if err := blob.StopDefaultBlobWriter(); err != nil {
-			log.Printf("Warning: Error stopping blob writer: %v", err)
-		}
-		if err := blob.CleanupDefaultBlobWriter(); err != nil {
-			log.Printf("Warning: Error cleaning up blob files: %v", err)
-		}
-
-		for i := 0; i < 3; i++ {
-			runtime.GC()
-		}
-
-		if r := recover(); r != nil {
-			log.Printf("❌ Fatal error: %v", r)
-			exitCode = 1
-		}
-
-		log.Printf("[Shutdown] Exiting with code %d", exitCode)
-		os.Exit(exitCode)
-	}()
-
+func run() error {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	err := config.EnsureInstalled()
-	if err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := config.EnsureInstalled(ctx); err != nil {
 		log.Printf("[Warning] Self-installation check failed: %v", err)
 	}
 
-	var cfg *config.Config
-
-	if config.Exists() {
-		cfg, err = config.Load()
-		if err != nil {
-			log.Fatalf("Failed to load config: %v\n\nPlease check your config file or delete it to reconfigure.", err)
+	cfg, err := loadConfig()
+	if err != nil {
+		if errors.Is(err, config.ErrSetupCancelled) {
+			return nil
 		}
-
-		if !cfg.IsComplete() {
-			cfg, err = config.RunSetup()
-			if err != nil {
-				log.Fatalf("Setup failed: %v", err)
-			}
-		}
-	} else {
-		cfg, err = config.RunSetup()
-		if err != nil {
-			log.Fatalf("Setup failed: %v", err)
-		}
+		return err
 	}
 
 	database, err := db.Open(cfg.DBPath)
 	if err != nil {
-		log.Fatalf("Failed to open database at '%s': %v\n\nPlease ensure:\n- The path is valid\n- You have write permissions\n- Your antivirus is not blocking the file", cfg.DBPath, err)
+		return fmt.Errorf("failed to open database at '%s': %w", cfg.DBPath, err)
 	}
 	defer database.Close()
 
-	err = ui.CreateDirectoryWithSudo(cfg.DownloadDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to create download directory: %v\n", err)
+	if err := os.MkdirAll(cfg.DownloadDir, 0755); err != nil {
+		return fmt.Errorf("нет прав на запись в %s. Пожалуйста, проверьте права доступа: %w", cfg.DownloadDir, err)
 	}
 
-	loadErr := i18n.LoadFromEmbed()
-	if loadErr != nil {
-		log.Printf("Info: Embedded locales not available: %v, trying filesystem paths", loadErr)
-
-		exePath, err := os.Executable()
-		if err != nil {
-			log.Printf("Warning: Could not determine executable path: %v", err)
-			exePath = "."
-		}
-
-		// Try paths in order: exe dir, current dir, project root, /usr/share/furryjan
-		possiblePaths := []string{
-			filepath.Join(filepath.Dir(exePath), "i18n", "locales"),
-			filepath.Join(".", "i18n", "locales"),
-			filepath.Join("..", "i18n", "locales"),
-			"/usr/share/furryjan/locales",
-		}
-
-		for _, path := range possiblePaths {
-			loadErr = i18n.Load(path)
-			if loadErr == nil {
-				log.Printf("[Config] Translations loaded from: %s", path)
-				break
-			}
-		}
-	} else {
-		log.Printf("[Config] Translations loaded from embedded binary")
-	}
-
-	if loadErr != nil {
-		log.Printf("Warning: Failed to load translations: %v", loadErr)
+	if err := loadLocales(); err != nil {
+		log.Printf("Warning: Failed to load translations: %v", err)
 		log.Printf("Falling back to en-US keys as translations")
 	}
 
 	i18n.SetGlobal(cfg.Language)
 	log.Printf("[Config] Language: %s", cfg.Language)
-
-	// Log current configuration
 	log.Printf("[Config] BlobWriterEnabled=%v, BlobBufferMB=%d, BlobAutoCleanup=%v, LogLevel=%s",
 		cfg.BlobWriterEnabled, cfg.BlobBufferMB, cfg.BlobAutoCleanup, cfg.LogLevel)
 	log.Printf("[Startup] Download directory: %s", cfg.DownloadDir)
 	log.Printf("[Startup] Database: %s", cfg.DBPath)
 
-	// Start blob writer as the default download backend if enabled
 	if cfg.BlobWriterEnabled {
 		blobOut := filepath.Join(cfg.DownloadDir, "data.blob")
 		blobIndex := filepath.Join(cfg.DownloadDir, "data.index.json")
 		bufSizeBytes := cfg.BlobBufferMB * 1024 * 1024
 		log.Printf("[Startup] Starting blob writer: %s", blobOut)
-		if err := blob.StartDefaultBlobWriter(blobOut, blobIndex, bufSizeBytes, cfg.BlobAutoCleanup, string(cfg.LogLevel)); err != nil {
+		if err := blob.StartDefaultBlobWriter(blobOut, blobIndex, bufSizeBytes, cfg.BlobAutoCleanup, string(cfg.LogLevel), database); err != nil {
 			log.Printf("ERROR: Failed to start blob writer: %v", err)
 			log.Printf("FALLBACK: Using direct filesystem mode instead")
 		} else {
-			log.Printf("✅ Blob writer started successfully: %s (index: %s), buffer=%dMB, auto-cleanup=%v", blobOut, blobIndex, cfg.BlobBufferMB, cfg.BlobAutoCleanup)
+			defer func() {
+				if err := blob.StopDefaultBlobWriter(); err != nil {
+					log.Printf("Warning: Error stopping blob writer: %v", err)
+				}
+			}()
+			log.Printf("Blob writer started successfully: %s, buffer=%dMB, auto-cleanup=%v", blobOut, cfg.BlobBufferMB, cfg.BlobAutoCleanup)
 		}
 	} else {
 		log.Printf("Blob writer disabled in settings, using direct filesystem mode")
 	}
 
-	// Run UI
-	err = ui.Run(cfg, database)
-	if err != nil {
-		log.Printf("UI error: %v", err)
-		exitCode = 1
-		return
+	if err := ui.Run(ctx, cfg, database); err != nil {
+		if errors.Is(err, ui.ErrRestartRequested) || errors.Is(err, ui.ErrExitRequested) {
+			return nil
+		}
+		return fmt.Errorf("ui error: %w", err)
 	}
+
+	return nil
 }
 
-// killProcesses terminates all e621dl and furryjan processes
-func killProcesses() {
-	processes := []string{"e621dl", "furryjan"}
-
-	for _, proc := range processes {
-		cmd := exec.Command("pkill", "-f", proc)
-		// Suppress error output - it's expected if no processes are found
-		err := cmd.Run()
-		if err == nil {
-			log.Printf("[Shutdown] Killed process: %s", proc)
+func loadConfig() (*config.Config, error) {
+	if config.Exists() {
+		cfg, err := config.Load()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load config: %w", err)
 		}
-		// Don't log errors - pkill returns error if no process found, which is fine
+		if cfg.IsComplete() {
+			return cfg, nil
+		}
 	}
+
+	cfg, err := config.RunSetup()
+	if err != nil {
+		return nil, fmt.Errorf("setup failed: %w", err)
+	}
+	return cfg, nil
+}
+
+func loadLocales() error {
+	if err := i18n.LoadFromEmbed(); err == nil {
+		log.Printf("[Config] Translations loaded from embedded binary")
+		return nil
+	}
+
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("embedded locales unavailable and executable path not available: %w", err)
+	}
+
+	adjacentPath := filepath.Join(filepath.Dir(exePath), "i18n", "locales")
+	if err := i18n.Load(adjacentPath); err == nil {
+		log.Printf("[Config] Translations loaded from: %s", adjacentPath)
+		return nil
+	}
+
+	return fmt.Errorf("embedded locales unavailable and adjacent locales path failed: %s", adjacentPath)
 }

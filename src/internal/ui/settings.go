@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +11,7 @@ import (
 	"furryjan/internal/config"
 )
 
-func RunSettingsFlow(cfg *config.Config) error {
+func RunSettingsFlow(ctx context.Context, cfg *config.Config) error {
 	for {
 		ClearScreen()
 		fmt.Println()
@@ -32,10 +33,15 @@ func RunSettingsFlow(cfg *config.Config) error {
 		fmt.Println("═════════════════════════════════════════════════════════════════")
 
 		choice := Prompt(i18n.T("prompt", "choose"))
+		if IsExitInput(choice) {
+			return ErrExitRequested
+		}
 
 		switch choice {
 		case "1":
-			runSettingsEditor(cfg)
+			if err := runSettingsEditor(ctx, cfg); err != nil {
+				return err
+			}
 		case "2":
 			if Confirm(i18n.T("settings", "resetConfirm"), false) {
 				err := config.DeleteConfig()
@@ -50,7 +56,7 @@ func RunSettingsFlow(cfg *config.Config) error {
 			}
 		case "3":
 			if Confirm(i18n.T("settings", "uninstallConfirm"), false) {
-				_, err := config.Uninstall()
+				_, err := config.Uninstall(ctx)
 				fmt.Println()
 				if err != nil {
 					PrintError(fmt.Sprintf("%s: %v", i18n.T("settings", "uninstallFailed"), err))
@@ -58,7 +64,7 @@ func RunSettingsFlow(cfg *config.Config) error {
 					WaitForEnter(i18n.T("prompt", "enterToContinue"))
 				} else {
 					PrintSuccess(i18n.T("settings", "uninstallSuccess"))
-					os.Exit(0)
+					return ErrExitRequested
 				}
 			}
 		case "4":
@@ -69,7 +75,7 @@ func RunSettingsFlow(cfg *config.Config) error {
 	}
 }
 
-func runSettingsEditor(cfg *config.Config) error {
+func runSettingsEditor(ctx context.Context, cfg *config.Config) error {
 	ClearScreen()
 	fmt.Println()
 	fmt.Println(i18n.T("settings", "whichSetting"))
@@ -86,16 +92,29 @@ func runSettingsEditor(cfg *config.Config) error {
 	fmt.Println("11) " + i18n.T("settings", "cancel"))
 
 	settingChoice := Prompt(i18n.T("prompt", "choose"))
+	if IsExitInput(settingChoice) {
+		return ErrExitRequested
+	}
 
 	switch settingChoice {
 	case "1":
-		editLanguage(cfg)
+		if err := editLanguage(ctx, cfg); err != nil {
+			return err
+		}
 	case "2":
-		cfg.Username = Prompt(i18n.T("settings", "selectUsername"))
+		username := Prompt(i18n.T("settings", "selectUsername"))
+		if IsExitInput(username) {
+			return ErrExitRequested
+		}
+		cfg.Username = username
 		cfg.Save()
 		PrintSuccess(i18n.T("settings", "saved"))
 	case "3":
-		cfg.APIKey = Prompt(i18n.T("settings", "selectAPIKey"))
+		apiKey := Prompt(i18n.T("settings", "selectAPIKey"))
+		if IsExitInput(apiKey) {
+			return ErrExitRequested
+		}
+		cfg.APIKey = apiKey
 		cfg.Save()
 		PrintSuccess(i18n.T("settings", "saved"))
 	case "4":
@@ -105,9 +124,13 @@ func runSettingsEditor(cfg *config.Config) error {
 	case "6":
 		editMaxFileSize(cfg)
 	case "7":
-		editBlobWriter(cfg)
+		if err := editBlobWriter(ctx, cfg); err != nil {
+			return err
+		}
 	case "8":
-		editBufferSize(cfg)
+		if err := editBufferSize(ctx, cfg); err != nil {
+			return err
+		}
 	case "9":
 		editAutoCleanup(cfg)
 	case "10":
@@ -120,7 +143,7 @@ func runSettingsEditor(cfg *config.Config) error {
 
 func editDownloadDir(cfg *config.Config) {
 	newDir := Prompt(i18n.T("settings", "selectDownloadDir"))
-	if newDir == "" {
+	if newDir == "" || IsExitInput(newDir) {
 		return
 	}
 	// Expand ~ to home directory
@@ -128,13 +151,12 @@ func editDownloadDir(cfg *config.Config) {
 		homeDir, _ := os.UserHomeDir()
 		newDir = filepath.Join(homeDir, newDir[1:])
 	}
-	// Try to create directory with sudo support
-	err := CreateDirectoryWithSudo(newDir)
+	err := os.MkdirAll(newDir, 0755)
 	if err != nil {
 		fmt.Println()
 		PrintError(i18n.T("settings", "dirNotFound"))
 		PrintError(fmt.Sprintf("%s%s", i18n.T("settings", "pathLabel"), newDir))
-		PrintError(fmt.Sprintf("%s%v", i18n.T("settings", "reasonLabel"), err))
+		PrintError(fmt.Sprintf("%sНет прав на запись в %s. Пожалуйста, проверьте права доступа. (%v)", i18n.T("settings", "reasonLabel"), newDir, err))
 	} else {
 		cfg.DownloadDir = newDir
 		cfg.Save()
@@ -150,6 +172,9 @@ func editAllowedTypes(cfg *config.Config) {
 	fmt.Println("3) " + i18n.T("settings", "allTypes"))
 	fmt.Println("4) " + i18n.T("settings", "videoOnly"))
 	typeChoice := Prompt(i18n.T("prompt", "choose"))
+	if IsExitInput(typeChoice) {
+		return
+	}
 
 	switch typeChoice {
 	case "1":
@@ -168,12 +193,15 @@ func editAllowedTypes(cfg *config.Config) {
 func editMaxFileSize(cfg *config.Config) {
 	fmt.Println()
 	maxStr := Prompt(i18n.T("settings", "selectMaxSize"))
+	if IsExitInput(maxStr) {
+		return
+	}
 	fmt.Sscanf(maxStr, "%d", &cfg.MaxSizeMB)
 	cfg.Save()
 	PrintSuccess(i18n.T("settings", "saved"))
 }
 
-func editBlobWriter(cfg *config.Config) {
+func editBlobWriter(ctx context.Context, cfg *config.Config) error {
 	fmt.Println()
 	oldValue := cfg.BlobWriterEnabled
 	cfg.BlobWriterEnabled = Confirm(i18n.T("settings", "selectBlobWriter"), cfg.BlobWriterEnabled)
@@ -188,20 +216,24 @@ func editBlobWriter(cfg *config.Config) {
 			fmt.Println()
 			fmt.Println(i18n.T("settings", "restartFurryjan"))
 			fmt.Println()
-			RestartApplication()
+			return RestartApplication(ctx)
 		} else {
 			PrintSuccess(i18n.T("settings", "blobDisabled"))
 			fmt.Println()
 			fmt.Println(i18n.T("settings", "restartFurryjan"))
 			fmt.Println()
-			RestartApplication()
+			return RestartApplication(ctx)
 		}
 	}
+	return nil
 }
 
-func editBufferSize(cfg *config.Config) {
+func editBufferSize(ctx context.Context, cfg *config.Config) error {
 	fmt.Println()
 	bufStr := Prompt(i18n.T("settings", "selectBufferSize"))
+	if IsExitInput(bufStr) {
+		return nil
+	}
 	var bufMB int
 	fmt.Sscanf(bufStr, "%d", &bufMB)
 	if bufMB < 100 {
@@ -219,8 +251,9 @@ func editBufferSize(cfg *config.Config) {
 		fmt.Println()
 		fmt.Println(i18n.T("settings", "restartFurryjan"))
 		fmt.Println()
-		RestartApplication()
+		return RestartApplication(ctx)
 	}
+	return nil
 }
 
 func editAutoCleanup(cfg *config.Config) {
@@ -238,6 +271,9 @@ func editLogLevel(cfg *config.Config) {
 	fmt.Println("3) " + i18n.T("settings", "warn"))
 	fmt.Println("4) " + i18n.T("settings", "logError"))
 	levelChoice := Prompt(i18n.T("prompt", "choose"))
+	if IsExitInput(levelChoice) {
+		return
+	}
 	switch levelChoice {
 	case "1":
 		cfg.LogLevel = config.LogDebug
@@ -252,12 +288,15 @@ func editLogLevel(cfg *config.Config) {
 	PrintSuccess(fmt.Sprintf("Log level set to %s", cfg.LogLevel))
 }
 
-func editLanguage(cfg *config.Config) {
+func editLanguage(ctx context.Context, cfg *config.Config) error {
 	fmt.Println()
 	fmt.Println(i18n.T("settings", "selectLanguage"))
 	fmt.Println("1) English")
 	fmt.Println("2) Русский")
 	langChoice := Prompt(i18n.T("prompt", "choose"))
+	if IsExitInput(langChoice) {
+		return ErrExitRequested
+	}
 	oldLang := cfg.Language
 	switch langChoice {
 	case "1":
@@ -266,7 +305,7 @@ func editLanguage(cfg *config.Config) {
 		cfg.Language = "ru"
 	default:
 		PrintError(i18n.T("prompt", "choose"))
-		return
+		return nil
 	}
 	cfg.Save()
 	PrintSuccess(fmt.Sprintf(i18n.T("settings", "languageChangedTo"), getLanguageName(cfg.Language)))
@@ -274,8 +313,9 @@ func editLanguage(cfg *config.Config) {
 		fmt.Println()
 		fmt.Println(i18n.T("settings", "restartFurryjan"))
 		fmt.Println()
-		RestartApplication()
+		return RestartApplication(ctx)
 	}
+	return nil
 }
 
 func getLanguageName(lang string) string {

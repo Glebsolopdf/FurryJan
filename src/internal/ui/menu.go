@@ -1,22 +1,23 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"log"
 
 	"furryjan/i18n"
 	"furryjan/internal/config"
 	"furryjan/internal/db"
 )
 
-func Run(cfg *config.Config, database *db.DB) error {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("PANIC in UI: %v", r)
-		}
-	}()
-
+func Run(ctx context.Context, cfg *config.Config, database *db.DB) error {
 	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		ClearScreen()
 		fmt.Println()
 		fmt.Println("═════════════════════════════════════")
@@ -32,9 +33,14 @@ func Run(cfg *config.Config, database *db.DB) error {
 		choice := Prompt(i18n.T("prompt", "choose"))
 
 		switch choice {
+		case ".exit":
+			return nil
 		case "1":
-			err := RunDownloadFlow(cfg, database)
+			err := RunDownloadFlow(ctx, cfg, database)
 			if err != nil {
+				if errors.Is(err, ErrRestartRequested) || errors.Is(err, ErrExitRequested) {
+					return err
+				}
 				PrintError(fmt.Sprintf("%s: %v", i18n.T("error", "error"), err))
 			}
 
@@ -51,8 +57,11 @@ func Run(cfg *config.Config, database *db.DB) error {
 			}
 
 		case "4":
-			err := RunSettingsFlow(cfg)
+			err := RunSettingsFlow(ctx, cfg)
 			if err != nil {
+				if errors.Is(err, ErrRestartRequested) || errors.Is(err, ErrExitRequested) {
+					return err
+				}
 				PrintError(fmt.Sprintf("%s: %v", i18n.T("error", "error"), err))
 			}
 

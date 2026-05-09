@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,7 +11,7 @@ import (
 
 // Uninstall removes the application (config folder and binary) with sudo
 // Prompts for password and performs deletion with elevated privileges
-func Uninstall() (string, error) {
+func Uninstall(ctx context.Context) (string, error) {
 	// Get the binary path
 	ex, err := os.Executable()
 	if err != nil {
@@ -30,27 +31,27 @@ func Uninstall() (string, error) {
 	password = strings.TrimSpace(password)
 
 	// Remove config directory with sudo
-	cmdRmConfig := exec.Command("sudo", "-S", "rm", "-rf", configDir)
+	cmdRmConfig := exec.CommandContext(ctx, "sudo", "-S", "rm", "-rf", configDir)
 	cmdRmConfig.Stdin = strings.NewReader(password + "\n")
 	err1 := cmdRmConfig.Run()
 
 	// Remove binary with sudo
-	cmdRmBin := exec.Command("sudo", "-S", "rm", "-f", ex)
+	cmdRmBin := exec.CommandContext(ctx, "sudo", "-S", "rm", "-f", ex)
 	cmdRmBin.Stdin = strings.NewReader(password + "\n")
 	err2 := cmdRmBin.Run()
 
 	// Remove locales with sudo
-	cmdRmLocales := exec.Command("sudo", "-S", "rm", "-rf", "/usr/share/furryjan")
+	cmdRmLocales := exec.CommandContext(ctx, "sudo", "-S", "rm", "-rf", "/usr/share/furryjan")
 	cmdRmLocales.Stdin = strings.NewReader(password + "\n")
 	err3 := cmdRmLocales.Run()
 
 	// Remove desktop file with sudo
-	cmdRmDesktop := exec.Command("sudo", "-S", "rm", "-f", "/usr/share/applications/furryjan.desktop")
+	cmdRmDesktop := exec.CommandContext(ctx, "sudo", "-S", "rm", "-f", "/usr/share/applications/furryjan.desktop")
 	cmdRmDesktop.Stdin = strings.NewReader(password + "\n")
 	err4 := cmdRmDesktop.Run()
 
 	// Remove icon with sudo
-	cmdRmIcon := exec.Command("sudo", "-S", "rm", "-f", "/usr/share/pixmaps/furryjan.png")
+	cmdRmIcon := exec.CommandContext(ctx, "sudo", "-S", "rm", "-f", "/usr/share/pixmaps/furryjan.png")
 	cmdRmIcon.Stdin = strings.NewReader(password + "\n")
 	err5 := cmdRmIcon.Run()
 

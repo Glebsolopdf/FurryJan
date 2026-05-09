@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -11,7 +12,7 @@ import (
 	"furryjan/assets"
 )
 
-func EnsureInstalled() error {
+func EnsureInstalled(ctx context.Context) error {
 	targetPath := "/usr/bin/furryjan"
 
 	if fileExists(targetPath) {
@@ -33,7 +34,7 @@ func EnsureInstalled() error {
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Println()
 
-	err = copyWithSudo(currentExe, targetPath)
+	err = copyWithSudo(ctx, currentExe, targetPath)
 	if err != nil {
 		fmt.Printf("⚠ Warning: could not install to /usr/bin: %v\n", err)
 		fmt.Println("The program will continue, but auto-update won't be available.")
@@ -54,11 +55,11 @@ func EnsureInstalled() error {
 
 	if fileExists(i18nSrc) {
 		i18nDst := "/usr/share/furryjan/i18n"
-		_ = copyDirWithSudo(i18nSrc, i18nDst)
+		_ = copyDirWithSudo(ctx, i18nSrc, i18nDst)
 	}
 
-	_ = createDesktopFile()
-	_ = installIcon()
+	_ = createDesktopFile(ctx)
+	_ = installIcon(ctx)
 
 	fmt.Println("✓ Furryjan installed to /usr/bin/furryjan")
 	fmt.Println()
@@ -71,8 +72,8 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func copyWithSudo(src, dst string) error {
-	cmd := exec.Command("sudo", "install", "-m", "0755", src, dst)
+func copyWithSudo(ctx context.Context, src, dst string) error {
+	cmd := exec.CommandContext(ctx, "sudo", "install", "-m", "0755", src, dst)
 	err := cmd.Run()
 	if err == nil {
 		return nil
@@ -84,7 +85,7 @@ func copyWithSudo(src, dst string) error {
 	}
 	defer srcFile.Close()
 
-	cmd = exec.Command("sudo", "tee", dst)
+	cmd = exec.CommandContext(ctx, "sudo", "tee", dst)
 	cmd.Stdin = srcFile
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
@@ -114,12 +115,12 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-func copyDirWithSudo(src, dst string) error {
-	cmd := exec.Command("sudo", "cp", "-r", src, dst)
+func copyDirWithSudo(ctx context.Context, src, dst string) error {
+	cmd := exec.CommandContext(ctx, "sudo", "cp", "-r", src, dst)
 	return cmd.Run()
 }
 
-func createDesktopFile() error {
+func createDesktopFile(ctx context.Context) error {
 	desktopContent := `[Desktop Entry]
 Version=1.0
 Type=Application
@@ -131,18 +132,18 @@ Categories=Utility;Network;FileTransfer;
 Icon=/usr/share/pixmaps/furryjan.png
 StartupNotify=true
 `
-	cmd := exec.Command("sudo", "tee", "/usr/share/applications/furryjan.desktop")
+	cmd := exec.CommandContext(ctx, "sudo", "tee", "/usr/share/applications/furryjan.desktop")
 	cmd.Stdin = strings.NewReader(desktopContent)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	exec.Command("sudo", "chmod", "644", "/usr/share/applications/furryjan.desktop").Run()
+	exec.CommandContext(ctx, "sudo", "chmod", "644", "/usr/share/applications/furryjan.desktop").Run()
 	return nil
 }
 
-func installIcon() error {
+func installIcon(ctx context.Context) error {
 	iconData, err := assets.FS.ReadFile("icon.png")
 	if err != nil {
 		return nil
@@ -154,10 +155,10 @@ func installIcon() error {
 	}
 	defer os.Remove(tempFile)
 
-	cmd := exec.Command("sudo", "cp", tempFile, "/usr/share/pixmaps/furryjan.png")
+	cmd := exec.CommandContext(ctx, "sudo", "cp", tempFile, "/usr/share/pixmaps/furryjan.png")
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	exec.Command("sudo", "chmod", "644", "/usr/share/pixmaps/furryjan.png").Run()
+	exec.CommandContext(ctx, "sudo", "chmod", "644", "/usr/share/pixmaps/furryjan.png").Run()
 	return nil
 }

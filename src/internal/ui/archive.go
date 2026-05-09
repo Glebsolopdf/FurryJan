@@ -24,6 +24,9 @@ func RunArchiveFlow(cfg *config.Config, database *db.DB) error {
 	fmt.Println("─────────────────────────────────────────────────────")
 
 	choice := Prompt(i18n.T("prompt", "choose"))
+	if IsExitInput(choice) {
+		return ErrExitRequested
+	}
 
 	includeTags := []string{}
 	switch choice {
@@ -31,6 +34,9 @@ func RunArchiveFlow(cfg *config.Config, database *db.DB) error {
 		// Archive all
 	case "2":
 		tagsInput := Prompt(i18n.T("archive", "enterTagsFilter"))
+		if IsExitInput(tagsInput) {
+			return ErrExitRequested
+		}
 		if tagsInput != "" {
 			includeTags = strings.Fields(tagsInput)
 		}
@@ -43,6 +49,9 @@ func RunArchiveFlow(cfg *config.Config, database *db.DB) error {
 
 	// Get exclusions
 	excludeInput := Prompt(i18n.T("archive", "excludeTags"))
+	if IsExitInput(excludeInput) {
+		return ErrExitRequested
+	}
 	excludeTags := []string{}
 	if excludeInput != "" {
 		excludeTags = strings.Fields(excludeInput)
@@ -60,6 +69,9 @@ func RunArchiveFlow(cfg *config.Config, database *db.DB) error {
 	fmt.Println("─────────────────────────────────────────────────────")
 
 	dirChoice := Prompt(i18n.T("prompt", "choose"))
+	if IsExitInput(dirChoice) {
+		return ErrExitRequested
+	}
 
 	var outputDir string
 	switch dirChoice {
@@ -67,6 +79,9 @@ func RunArchiveFlow(cfg *config.Config, database *db.DB) error {
 		outputDir = cfg.DownloadDir
 	case "2":
 		customPath := Prompt(i18n.T("archive", "enterPath"))
+		if IsExitInput(customPath) {
+			return ErrExitRequested
+		}
 		if customPath == "" {
 			return nil
 		}
@@ -80,6 +95,9 @@ func RunArchiveFlow(cfg *config.Config, database *db.DB) error {
 
 	// Get output filename
 	outputName := Prompt(i18n.T("archive", "archiveName"))
+	if IsExitInput(outputName) {
+		return ErrExitRequested
+	}
 	if outputName == "" {
 		outputName = i18n.T("archive", "defaultArchiveName")
 	}

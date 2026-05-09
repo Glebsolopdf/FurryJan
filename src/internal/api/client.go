@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -18,7 +19,6 @@ const (
 	UserAgentFormat = "Furryjan (by %s on e621)"
 )
 
-// Client is an HTTP client for e621 API
 type Client struct {
 	username     string
 	apiKey       string
@@ -48,6 +48,10 @@ func NewClientWithTimeout(username, apiKey string, rateLimitMS int, timeout time
 }
 
 func (c *Client) GetPosts(tags []string, limit, page int) ([]Post, error) {
+	return c.GetPostsCtx(context.Background(), tags, limit, page)
+}
+
+func (c *Client) GetPostsCtx(ctx context.Context, tags []string, limit, page int) ([]Post, error) {
 	query := url.Values{}
 
 	if len(tags) > 0 {
@@ -65,7 +69,7 @@ func (c *Client) GetPosts(tags []string, limit, page int) ([]Post, error) {
 	urlStr := fmt.Sprintf("%s/posts.json?%s", BaseURL, query.Encode())
 	var resp PostsResponse
 
-	err := c.doRequest("GET", urlStr, nil, &resp)
+	err := c.doRequest(ctx, "GET", urlStr, nil, &resp)
 	if err != nil {
 		return nil, err
 	}
@@ -74,10 +78,14 @@ func (c *Client) GetPosts(tags []string, limit, page int) ([]Post, error) {
 }
 
 func (c *Client) GetPost(postID int) (*Post, error) {
+	return c.GetPostCtx(context.Background(), postID)
+}
+
+func (c *Client) GetPostCtx(ctx context.Context, postID int) (*Post, error) {
 	urlStr := fmt.Sprintf("%s/posts/%d.json", BaseURL, postID)
 	var resp PostResponse
 
-	err := c.doRequest("GET", urlStr, nil, &resp)
+	err := c.doRequest(ctx, "GET", urlStr, nil, &resp)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +94,11 @@ func (c *Client) GetPost(postID int) (*Post, error) {
 }
 
 func (c *Client) DownloadFile(fileURL string, writer io.Writer) (int64, error) {
-	req, err := http.NewRequest("GET", fileURL, nil)
+	return c.DownloadFileCtx(context.Background(), fileURL, writer)
+}
+
+func (c *Client) DownloadFileCtx(ctx context.Context, fileURL string, writer io.Writer) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", fileURL, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -111,7 +123,11 @@ func (c *Client) DownloadFile(fileURL string, writer io.Writer) (int64, error) {
 }
 
 func (c *Client) DownloadFileWithProgress(fileURL string, expectedSize int) (*http.Response, error) {
-	req, err := http.NewRequest("GET", fileURL, nil)
+	return c.DownloadFileWithProgressCtx(context.Background(), fileURL, expectedSize)
+}
+
+func (c *Client) DownloadFileWithProgressCtx(ctx context.Context, fileURL string, expectedSize int) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", fileURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -133,11 +149,11 @@ func (c *Client) DownloadFileWithProgress(fileURL string, expectedSize int) (*ht
 	return resp, nil
 }
 
-func (c *Client) doRequest(method, urlStr string, body io.Reader, result interface{}) error {
+func (c *Client) doRequest(ctx context.Context, method, urlStr string, body io.Reader, result interface{}) error {
 	var lastErr error
 
 	for attempt := 0; attempt < c.retryCount; attempt++ {
-		req, err := http.NewRequest(method, urlStr, body)
+		req, err := http.NewRequestWithContext(ctx, method, urlStr, body)
 		if err != nil {
 			return err
 		}

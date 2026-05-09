@@ -9,13 +9,18 @@ import (
 
 func ExtractAndCleanupDefaultBlobWriter(baseDir string) error {
 	defaultMu.Lock()
-	defer defaultMu.Unlock()
+	bw := defaultBlobWriter
+	defaultBlobWriter = nil
+	defaultMu.Unlock()
 
-	if defaultBlobWriter == nil {
+	if bw == nil {
 		return nil
 	}
 
-	bw := defaultBlobWriter
+	if err := bw.CloseWithoutCleanup(); err != nil {
+		return fmt.Errorf("failed to stop blob writer before extraction: %w", err)
+	}
+
 	basePath := bw.baseOutPath
 	baseIndex := bw.baseIndexPath
 
@@ -24,11 +29,9 @@ func ExtractAndCleanupDefaultBlobWriter(baseDir string) error {
 	}
 
 	if _, err := os.Stat(basePath); err == nil {
-		if _, err := os.Stat(baseIndex); err == nil {
-			if err := ExtractBlobFile(basePath, baseIndex, baseDir); err != nil {
-				if !blobWriterSilent {
-					fmt.Printf("[BlobWriter] Warning: Failed to extract base blob: %v\n", err)
-				}
+		if err := ExtractBlobFile(basePath, baseIndex, baseDir, bw.indexStore); err != nil {
+			if !blobWriterSilent {
+				fmt.Printf("[BlobWriter] Warning: Failed to extract base blob: %v\n", err)
 			}
 		}
 		_ = os.Remove(basePath)
@@ -40,11 +43,9 @@ func ExtractAndCleanupDefaultBlobWriter(baseDir string) error {
 		numberedIndex := fmt.Sprintf("%s.%d", baseIndex, i)
 
 		if _, err := os.Stat(numberedPath); err == nil {
-			if _, err := os.Stat(numberedIndex); err == nil {
-				if err := ExtractBlobFile(numberedPath, numberedIndex, baseDir); err != nil {
-					if !blobWriterSilent {
-						fmt.Printf("[BlobWriter] Warning: Failed to extract blob %d: %v\n", i, err)
-					}
+			if err := ExtractBlobFile(numberedPath, numberedIndex, baseDir, bw.indexStore); err != nil {
+				if !blobWriterSilent {
+					fmt.Printf("[BlobWriter] Warning: Failed to extract blob %d: %v\n", i, err)
 				}
 			}
 			_ = os.Remove(numberedPath)
@@ -58,24 +59,37 @@ func ExtractAndCleanupDefaultBlobWriter(baseDir string) error {
 	if !blobWriterSilent {
 		fmt.Printf("[BlobWriter] Extract and cleanup complete\n")
 	}
-	defaultBlobWriter = nil
 	return nil
 }
 
-func ExtractBlobFile(blobPath, indexPath, baseDir string) error {
-	indexFile, err := os.Open(indexPath)
-	if err != nil {
-		return fmt.Errorf("failed to open index: %w", err)
-	}
-	defer indexFile.Close()
-
-	var index map[string]struct {
+func ExtractBlobFile(blobPath, indexPath, baseDir string, store IndexStore) error {
+	index := make(map[string]struct {
 		Offset int64 `json:"offset"`
 		Size   int64 `json:"size"`
-	}
-	dec := json.NewDecoder(indexFile)
-	if err := dec.Decode(&index); err != nil {
-		return fmt.Errorf("failed to decode index: %w", err)
+	})
+
+	if store != nil {
+		entries, err := store.ListBlobEntries(blobPath)
+		if err == nil && len(entries) > 0 {
+			for _, entry := range entries {
+				index[entry.FileName] = struct {
+					Offset int64 `json:"offset"`
+					Size   int64 `json:"size"`
+				}{Offset: entry.Offset, Size: entry.Size}
+			}
+		} else {
+			jsonIndex, err := readJSONIndex(indexPath)
+			if err != nil {
+				return err
+			}
+			index = jsonIndex
+		}
+	} else {
+		jsonIndex, err := readJSONIndex(indexPath)
+		if err != nil {
+			return err
+		}
+		index = jsonIndex
 	}
 
 	blobFile, err := os.Open(blobPath)
@@ -116,5 +130,31 @@ func ExtractBlobFile(blobPath, indexPath, baseDir string) error {
 	if !blobWriterSilent {
 		fmt.Printf("[BlobWriter] ✅ Extracted %d files from blob\n", extractedCount)
 	}
+
+	if store != nil {
+		_ = store.DeleteBlobEntries(blobPath)
+	}
+
 	return nil
+}
+
+func readJSONIndex(indexPath string) (map[string]struct {
+	Offset int64 `json:"offset"`
+	Size   int64 `json:"size"`
+}, error) {
+	indexFile, err := os.Open(indexPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open index: %w", err)
+	}
+	defer indexFile.Close()
+
+	var target map[string]struct {
+		Offset int64 `json:"offset"`
+		Size   int64 `json:"size"`
+	}
+	dec := json.NewDecoder(indexFile)
+	if err := dec.Decode(&target); err != nil {
+		return nil, fmt.Errorf("failed to decode index: %w", err)
+	}
+	return target, nil
 }

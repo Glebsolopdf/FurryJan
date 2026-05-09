@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 	"furryjan/internal/downloader/blob"
 )
 
-func RunDownloadFlow(cfg *config.Config, database *db.DB) error {
+func RunDownloadFlow(ctx context.Context, cfg *config.Config, database *db.DB) error {
 	ClearScreen()
 	fmt.Println()
 	fmt.Println("─────────────────────────────────────────────────────")
@@ -27,12 +28,18 @@ func RunDownloadFlow(cfg *config.Config, database *db.DB) error {
 	fmt.Println("─────────────────────────────────────────────────────")
 
 	choice := Prompt(i18n.T("prompt", "choose"))
+	if IsExitInput(choice) {
+		return ErrExitRequested
+	}
 
 	var tags []string
 
 	switch choice {
 	case "1":
 		tagsInput := Prompt(i18n.T("download", "tagInput"))
+		if IsExitInput(tagsInput) {
+			return ErrExitRequested
+		}
 		if tagsInput == "" {
 			fmt.Println(i18n.T("download", "cancel"))
 			return nil
@@ -54,6 +61,9 @@ func RunDownloadFlow(cfg *config.Config, database *db.DB) error {
 
 	// Get limit
 	limitStr := Prompt(i18n.T("download", "limit"))
+	if IsExitInput(limitStr) {
+		return ErrExitRequested
+	}
 	limit := 0
 	if limitStr != "" {
 		fmt.Sscanf(limitStr, "%d", &limit)
@@ -86,7 +96,7 @@ func RunDownloadFlow(cfg *config.Config, database *db.DB) error {
 		DownloadDir: downloadDir,
 	}
 
-	result, err := downloader.Run(cfg, database, opts)
+	result, err := downloader.Run(ctx, cfg, database, opts)
 	if err != nil {
 		PrintError(fmt.Sprintf("%s: %v", i18n.T("error", "error"), err))
 		return nil
