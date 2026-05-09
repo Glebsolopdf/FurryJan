@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 const (
@@ -26,7 +26,7 @@ func Open(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("cannot create database directory '%s': %w", dir, err)
 	}
 
-	conn, err := sql.Open("sqlite3", dbPath)
+	conn, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open database '%s': %w", dbPath, err)
 	}

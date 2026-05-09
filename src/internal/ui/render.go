@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -34,8 +35,17 @@ func getReader() *bufio.Reader {
 }
 
 func ClearScreen() {
-	// Unix/Linux: ANSI escape codes
-	fmt.Print("\033[2J\033[H")
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("cmd", "/c", "cls")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err == nil {
+			return
+		}
+	}
+
+	// ANSI fallback for Unix-like terminals and modern consoles.
+	fmt.Print("\033[H\033[2J\033[3J")
 }
 
 func printBoxLine(left, fill, right string, width int) {

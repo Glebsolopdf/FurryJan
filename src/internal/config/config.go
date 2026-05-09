@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -19,22 +20,30 @@ const (
 
 // Config holds application configuration
 type Config struct {
-	Username          string    `json:"username"`
-	APIKey            string    `json:"api_key"`
-	DownloadDir       string    `json:"download_dir"`
-	DBPath            string    `json:"db_path"`
-	RateLimitMS       int       `json:"rate_limit_ms"`
-	AllowedTypes      []string  `json:"allowed_types"`
-	MaxSizeMB         int       `json:"max_size_mb"`
-	BlobWriterEnabled bool      `json:"blob_writer_enabled"`
-	BlobBufferMB      int       `json:"blob_buffer_mb"`
-	BlobAutoCleanup   bool      `json:"blob_auto_cleanup"`
-	LogLevel          LogLevel  `json:"log_level"`
-	Language          string    `json:"language"`
+	Username          string   `json:"username"`
+	APIKey            string   `json:"api_key"`
+	DownloadDir       string   `json:"download_dir"`
+	DBPath            string   `json:"db_path"`
+	RateLimitMS       int      `json:"rate_limit_ms"`
+	AllowedTypes      []string `json:"allowed_types"`
+	MaxSizeMB         int      `json:"max_size_mb"`
+	BlobWriterEnabled bool     `json:"blob_writer_enabled"`
+	BlobBufferMB      int      `json:"blob_buffer_mb"`
+	BlobAutoCleanup   bool     `json:"blob_auto_cleanup"`
+	LogLevel          LogLevel `json:"log_level"`
+	Language          string   `json:"language"`
 }
 
 func getConfigDir() string {
+	configDir, err := os.UserConfigDir()
+	if err == nil && configDir != "" {
+		return filepath.Join(configDir, "furryjan")
+	}
+
 	homeDir, _ := os.UserHomeDir()
+	if runtime.GOOS == "windows" {
+		return filepath.Join(homeDir, "AppData", "Roaming", "furryjan")
+	}
 	return filepath.Join(homeDir, ".config", "furryjan")
 }
 
@@ -42,6 +51,9 @@ func Default() *Config {
 	homeDir, _ := os.UserHomeDir()
 	configDir := getConfigDir()
 	downloadDir := filepath.Join(homeDir, "Downloads", "Furryjan")
+	if homeDir == "" {
+		downloadDir = filepath.Join(".", "Downloads", "Furryjan")
+	}
 	return &Config{
 		DownloadDir:       downloadDir,
 		DBPath:            filepath.Join(configDir, "history.db"),

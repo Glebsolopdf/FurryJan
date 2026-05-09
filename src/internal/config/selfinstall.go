@@ -7,12 +7,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"furryjan/assets"
 )
 
 func EnsureInstalled(ctx context.Context) error {
+	if runtime.GOOS == "windows" {
+		return ensureInstalledWindows(ctx)
+	}
+
 	targetPath := "/usr/bin/furryjan"
 
 	if fileExists(targetPath) {
@@ -62,6 +67,49 @@ func EnsureInstalled(ctx context.Context) error {
 	_ = installIcon(ctx)
 
 	fmt.Println("✓ Furryjan installed to /usr/bin/furryjan")
+	fmt.Println()
+
+	return nil
+}
+
+func ensureInstalledWindows(ctx context.Context) error {
+	_ = ctx
+
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		if userProfile := os.Getenv("USERPROFILE"); userProfile != "" {
+			localAppData = filepath.Join(userProfile, "AppData", "Local")
+		}
+	}
+	if localAppData == "" {
+		return nil
+	}
+
+	targetDir := filepath.Join(localAppData, "Programs", "Furryjan")
+	targetPath := filepath.Join(targetDir, "furryjan.exe")
+	if fileExists(targetPath) {
+		return nil
+	}
+
+	currentExe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot determine current executable: %w", err)
+	}
+
+	if strings.EqualFold(currentExe, targetPath) {
+		return nil
+	}
+
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return fmt.Errorf("cannot create install directory '%s': %w", targetDir, err)
+	}
+
+	if err := copyFile(currentExe, targetPath); err != nil {
+		return fmt.Errorf("cannot copy executable to '%s': %w", targetPath, err)
+	}
+
+	fmt.Println()
+	fmt.Printf("✓ Furryjan installed to %s\n", targetPath)
 	fmt.Println()
 
 	return nil

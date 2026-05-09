@@ -1,4 +1,4 @@
-# Furryjan — E621 Content Downloader for Windows
+# Furryjan for Windows
 
 ![Preview](forreadme/preview.png)
 
@@ -11,38 +11,45 @@ Features pagination, deduplication via SQLite, tag-based folder organization, an
 ## Requirements
 
 - **Binary**: Pre-built binary (no dependencies required after installation)
-- **From Source**: Go 1.21+, GCC (for `go-sqlite3` compilation)
+- **From Source**: Go 1.22+
 - **Account**: e621.net account + API key
+
+SQLite works via a pure-Go driver (`modernc.org/sqlite`), so GCC/CGO are not required.
 
 ---
 
-## Installation
+## Installation (Windows)
 
-### Quick Install (Linux)
+### Quick Install (PowerShell)
 
-```bash
-chmod +x install.sh && ./install.sh
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\install.ps1
 ```
 
 The script will:
-- Build the binary
-- Install it to `/usr/bin/furryjan`
-- Copy translations to `/usr/share/furryjan/locales`
-- Create a desktop entry for your application menu
+- Build `furryjan.exe`
+- Install it to `%LOCALAPPDATA%\Programs\Furryjan\furryjan.exe`
+- Optionally add `%LOCALAPPDATA%\Programs\Furryjan` to user `PATH`
 
 ### Manual Build
 
-```bash
-cd src/
-go build -o furryjan ./cmd/main.go
-sudo mv furryjan /usr/bin/
+```powershell
+cd src
+go build -o furryjan.exe ./cmd/main.go
 ```
 
 ---
 
 ## Usage
 
-```bash
+```powershell
+furryjan.exe
+```
+
+If `install.ps1` added `%LOCALAPPDATA%\Programs\Furryjan` to `PATH`, you can run:
+
+```powershell
 furryjan
 ```
 
@@ -78,10 +85,10 @@ Step 1/4  Enter your username on e621:
 Step 2/4  Enter your API key (Open Profile Settings on e621 → Manage API Access):
  > ****************************
 
-Step 3/4  Download folder (Enter = /home/user/Downloads/Furryjan):
+Step 3/4  Download folder (Enter = C:\Users\user\Downloads\Furryjan):
  >
 
-✓ Config saved: /home/user/.config/furryjan/config.json
+✓ Config saved: C:\Users\user\AppData\Roaming\furryjan\config.json
 ```
 
 Your API key is stored locally. You can find it in your e621 account settings.
@@ -166,7 +173,7 @@ Customize your experience:
 | **Auto Cleanup** | Delete blob files after download | On |
 | **Max File Size** | 0 = unlimited (in MB) | 0 |
 | **Buffer Size** | 100-2000 MB | 500 |
-| **Download Directory** | Custom path | ~/Downloads/Furryjan |
+| **Download Directory** | Custom path | C:\Users\<user>\Downloads\Furryjan |
 
 ---
 
@@ -174,9 +181,9 @@ Customize your experience:
 
 ### Storage
 
-- **Config**: `~/.config/furryjan/config.json`
-- **Database**: `~/.local/share/furryjan/furryjan.db` (SQLite)
-- **Downloads**: Configurable (default: `~/Downloads/Furryjan`)
+- **Config**: `%APPDATA%\furryjan\config.json`
+- **Database**: `%APPDATA%\furryjan\history.db` (SQLite)
+- **Downloads**: Configurable (default: `%USERPROFILE%\Downloads\Furryjan`)
 
 ### Performance
 
@@ -207,10 +214,8 @@ The program will guide you through safe uninstallation.
 
 ### Manual Uninstall
 
-```bash
-sudo rm /usr/bin/furryjan
-sudo rm -rf ~/.config/furryjan
-sudo rm -rf ~/.local/share/furryjan
+```powershell
+.\uninstall.ps1
 ```
 
 ---
@@ -219,7 +224,7 @@ sudo rm -rf ~/.local/share/furryjan
 
 ### "Failed to load translations"
 - Locales are embedded in the binary, this is usually not an issue
-- Try reinstalling: `./install.sh`
+- Try reinstalling: `.\install.ps1`
 
 ### Database locked error
 - Close all other Furryjan instances
@@ -239,12 +244,24 @@ sudo rm -rf ~/.local/share/furryjan
 ```
 src/
 ├── cmd/
-│   └── main.go                  # Entry point: init config/db, run UI
+│   └── main.go                  # Minimal entry point (delegates to internal/app)
 ├── i18n/
 │   └── locales/
 │       ├── en.json              # English translations (embedded)
 │       └── ru.json              # Russian translations (embedded)
 └── internal/
+  ├── app/                     # Application bootstrap/orchestration layer
+  │   ├── start.go             # Start/run lifecycle
+  │   ├── parsers/             # parse_* startup checks/initialization
+  │   │   ├── parse_data.go
+  │   │   ├── parse_config.go
+  │   │   ├── parse_database.go
+  │   │   └── parse_download_dir.go
+  │   └── bootstrap/           # Non-parse startup helpers
+  │       ├── data.go          # Shared startup state + cleanup
+  │       ├── runtime.go       # Runtime language/log setup
+  │       ├── blob.go          # Blob writer startup
+  │       └── locales.go       # Locale loading strategy
     ├── ui/                      # Terminal UI & menu system
     │   ├── menu.go              # Main menu navigation
     │   ├── download.go          # Download flow & dialogs
@@ -254,16 +271,15 @@ src/
     │   └── render.go            # UI helpers (boxes, colors, input)
     ├── api/                     # E621 API client
     │   ├── client.go            # HTTP client with rate limiting
-    │   ├── types.go             # API response structures
-    │   └── manager.go           # API request management
+    │   └── types.go             # API response structures
     ├── config/                  # Configuration management
     │   ├── config.go            # Config loading/saving
     │   ├── setup.go             # Initial setup wizard
-    │   ├── selfinstall.go       # Binary self-installation
+    │   ├── selfinstall.go       # OS-aware self-installation (Windows/Linux)
     │   └── uninstall.go         # Uninstall handler
     ├── db/                      # SQLite database
-    │   ├── db.go                # Database initialization
-    │   ├── downloads.go         # Download history tracking
+    │   ├── db.go                # Database initialization + migrations
+    │   ├── blob_index.go        # Blob index persistence
     │   └── stats.go             # Statistics calculation
     ├── downloader/              # Download engine
     │   ├── downloader.go        # Main download loop
@@ -282,31 +298,33 @@ src/
 ### Data Flow
 
 ```
-User Input (Menu)
-    ↓
-config (Load settings)
-    ↓
-api.GetPosts (E621 API)
-    ↓
-downloader.Run (Main loop)
-    ├─ Fetch posts (paginated)
-    ├─ Check db (IsDownloaded)
-    ├─ Download files (with progress)
-    ├─ Save to blob/filesystem
-    └─ Store in db (SaveDownload)
-    ↓
-database (SQLite)
-    ├─ Track downloads
-    ├─ Store statistics
-    └─ Enable deduplication
-    ↓
-User sees results
+cmd/main.go
+  ↓
+internal/app/start.go (Start)
+  ↓
+internal/app/parsers/parse_data.go
+  ├─ parse_config.go
+  ├─ parse_database.go
+  └─ parse_download_dir.go
+  ↓
+internal/app/bootstrap/*
+  ├─ locales.go (load locales)
+  ├─ runtime.go (set language/logs)
+  ├─ blob.go (blob writer init)
+  └─ data.go (lifecycle/cleanup)
+  ↓
+ui.Run (main menu)
+  ↓
+download/history/archive/settings flows
 ```
 
 ### Key Components
 
 | Component | Purpose |
 |-----------|---------|
+| **App Package** | Startup orchestration and lifecycle management |
+| **Parsers Package** | Startup parsing/validation steps (`parse_*`) |
+| **Bootstrap Package** | Shared startup helpers (locales, blob, runtime, cleanup) |
 | **UI Package** | Terminal interface with menu-driven navigation |
 | **API Package** | E621 API client with rate limiting & auth |
 | **Config Package** | User settings and application configuration |
@@ -434,17 +452,17 @@ E621 API returns JSON with post data:
 
 ### Important Notes
 
-⚠️ **User-Agent Required:**
+ **User-Agent Required:**
 - All requests must include a descriptive User-Agent header
 - Furryjan uses: `Furryjan (by username on e621)`
 - Never impersonate browser user agents (will be blocked)
 
-⚠️ **Rate Limit Policy:**
+ **Rate Limit Policy:**
 - Hard limit: 2 requests/second
 - Recommended: ≤ 1 request/second
 - Sustained exceeding will result in IP bans
 
-⚠️ **Copyright & Terms:**
+ **Copyright & Terms:**
 - Respect content creators' rights
 - Follow e621 Terms of Service
 - Don't abuse the API for commercial purposes
@@ -460,9 +478,9 @@ E621 API returns JSON with post data:
 ## Credits
 
 Built with:
-- **Go 1.21+** - Fast, efficient binary
+- **Go 1.22+** - Fast, efficient binary
 - **SQLite** - Reliable local database
-- **go-sqlite3** - Database driver
+- **modernc.org/sqlite** - Pure-Go database driver (no CGO/GCC)
 - **progressbar/v3** - Download progress visualization
 - **E621 API** - Content source
 
