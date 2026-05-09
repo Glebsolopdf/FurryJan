@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 
@@ -17,7 +16,8 @@ import (
 
 var (
 	globalReader *bufio.Reader
-	readerOnce   sync.Once
+	readerSource *os.File
+	readerMu     sync.Mutex
 )
 
 const exitInputSentinel = ".exit"
@@ -27,10 +27,49 @@ func IsExitInput(s string) bool {
 }
 
 func getReader() *bufio.Reader {
-	readerOnce.Do(func() {
-		globalReader = bufio.NewReader(os.Stdin)
-	})
+	readerMu.Lock()
+	defer readerMu.Unlock()
+
+	if globalReader != nil {
+		return globalReader
+	}
+
+	initInputReaderLocked()
 	return globalReader
+}
+
+func initInputReaderLocked() {
+	readerSource = os.Stdin
+	globalReader = bufio.NewReader(readerSource)
+}
+
+func resetInputReader() {
+	readerMu.Lock()
+	defer readerMu.Unlock()
+
+	if readerSource != nil && readerSource != os.Stdin {
+		_ = readerSource.Close()
+	}
+
+	tty, err := os.Open("/dev/tty")
+	if err == nil {
+		readerSource = tty
+		globalReader = bufio.NewReader(readerSource)
+		return
+	}
+
+	initInputReaderLocked()
+}
+
+func readInputLine() (string, error) {
+	input, err := getReader().ReadString('\n')
+	if err == nil {
+		return input, nil
+	}
+
+	// Retry once with a refreshed reader, preferring /dev/tty when available.
+	resetInputReader()
+	return getReader().ReadString('\n')
 }
 
 func ClearScreen() {
@@ -69,7 +108,7 @@ func PrintBoxBottom(width int) {
 
 func Prompt(message string) string {
 	fmt.Print(message)
-	input, err := getReader().ReadString('\n')
+	input, err := readInputLine()
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
 			log.Printf("Error reading input: %v", err)
@@ -88,7 +127,10 @@ func Confirm(message string, defaultYes bool) bool {
 	prompt := fmt.Sprintf("%s %s: ", message, defaultStr)
 	fmt.Print(prompt)
 
-	input, _ := getReader().ReadString('\n')
+	input, err := readInputLine()
+	if err != nil {
+		return defaultYes
+	}
 	input = strings.ToLower(strings.TrimSpace(input))
 	if input == "" {
 		return defaultYes
@@ -99,7 +141,7 @@ func Confirm(message string, defaultYes bool) bool {
 
 func WaitForEnter(message string) {
 	fmt.Print(message)
-	getReader().ReadString('\n')
+	_, _ = readInputLine()
 }
 
 func PrintSuccess(message string) {
@@ -129,7 +171,7 @@ func PromptPassword(message string) string {
 	fmt.Println()
 	if err != nil {
 		// fallback to visible prompt
-		p, _ := getReader().ReadString('\n')
+		p, _ := readInputLine()
 		return strings.TrimSpace(p)
 	}
 	return strings.TrimSpace(string(bytePassword))
@@ -142,20 +184,6 @@ func BoolToString(b bool) string {
 	return "Нет"
 }
 
-func RestartApplication(ctx context.Context) error {
-	exePath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("ошибка при перезапуске: %w", err)
-	}
-
-	cmd := exec.CommandContext(ctx, exePath)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err = cmd.Start()
-	if err != nil {
-		return fmt.Errorf("ошибка при перезапуске: %w", err)
-	}
-
+func RestartApplication(_ context.Context) error {
 	return ErrRestartRequested
 }
