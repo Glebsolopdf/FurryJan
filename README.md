@@ -1,11 +1,12 @@
 # Furryjan — E621 Content Downloader
-⚠️The program is still rough and requires further corrections! It may load the processor and RAM!
 
 ![Preview](forreadme/preview.png)
 
 A powerful CLI utility written in Go for downloading content from [e621.net](https://e621.net) by tags.  
 Fully interactive interface — no flags needed, everything through menus and helpful prompts.  
 Features pagination, deduplication via SQLite, tag-based folder organization, and ZIP archiving.
+
+User docs (RU): [USER_WIKI_RU.md](USER_WIKI_RU.md)
 
 ---
 
@@ -19,7 +20,7 @@ Features pagination, deduplication via SQLite, tag-based folder organization, an
 
 ## Installation
 
-### Quick Install (Linux)
+### Quick Install (Linux/macOS)
 
 ```bash
 chmod +x install.sh && ./install.sh
@@ -85,7 +86,7 @@ Step 3/4  Download folder (Enter = /home/user/Downloads/Furryjan):
 ✓ Config saved: /home/user/.config/furryjan/config.json
 ```
 
-Your API key is stored locally. You can find it in your e621 account settings.
+Your API key is stored securely locally. You can find it in your e621 account settings.
 
 ---
 
@@ -116,13 +117,14 @@ Search Type Selection:
  2) Popular (order:hot)
  3) Latest (order:latest)
  4) High-Rated (order:score)
+ 5) Cancel
  > 1
 
 Enter tags separated by space: dragon
 Post limit (Enter = unlimited): 100
 Dry-run mode? (show without downloading) [y/N]: n
 
-→ Searching for posts with tags: dragon
+→ Searching posts with tags: dragon
 → Found: 243 posts. Starting download...
 
 [████████████░░░░░░░░]  112/243  dragon/6378597.png  2.4 MB/s
@@ -478,7 +480,8 @@ MIT License - See [LICENSE](LICENSE) file for details
 ## Support
 
 For issues, suggestions, or improvements:
-1. Verify your configuration in settings
-2. Review your API key permissions
+1. Check the [existing documentation](src/api.md)
+2. Verify your configuration in settings
+3. Review your API key permissions
 
 ![Enjoy](forreadme/enjoy.png)

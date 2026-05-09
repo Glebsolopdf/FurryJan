@@ -44,11 +44,20 @@ Comment=e621 Content Downloader
 Exec=/usr/bin/furryjan
 Terminal=true
 Categories=Utility;Network;FileTransfer;
-Icon=package-download
+Icon=/usr/share/pixmaps/furryjan.png
 StartupNotify=true
 EOF
 
 sudo chmod 644 "$DESKTOP_FILE"
+
+# Install icon
+echo "🎨 Installing icon..."
+sudo mkdir -p /usr/share/pixmaps
+if [ -f "assets/icon.png" ]; then
+    sudo cp assets/icon.png /usr/share/pixmaps/furryjan.png
+    sudo chmod 644 /usr/share/pixmaps/furryjan.png
+    echo "✓ Icon installed"
+fi
 
 echo "✅ Installation complete!"
 echo "Run 'furryjan' to start the application."
